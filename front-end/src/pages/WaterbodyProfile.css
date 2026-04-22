@@ -1,0 +1,274 @@
+/* ── Waterbody Profile Page ── */
+
+.wb-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 0;
+}
+
+/* ── Header ── */
+.wb-profile-header {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.5rem 2rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.wb-profile-name {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin: 0 0 0.6rem;
+  letter-spacing: -0.01em;
+}
+
+.wb-profile-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.wb-class-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: #D6DBF6;
+  color: #253C78;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  letter-spacing: 0.04em;
+}
+
+[data-theme='dark'] .wb-class-badge { background: #1a3050; color: #93c5fd; }
+
+.wb-stn-badge {
+  font-size: 0.72rem;
+  background: #DDF8DA;
+  color: #355232;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-weight: 600;
+}
+
+[data-theme='dark'] .wb-stn-badge { background: #1a3030; color: #86efac; }
+
+.wb-year-badge {
+  font-size: 0.72rem;
+  background: var(--badge-bg);
+  color: var(--badge-color);
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-weight: 600;
+}
+
+.wb-class-info-text {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* ── Chart card ── */
+.wb-chart-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.wb-chart-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.wb-chart-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 0.2rem;
+}
+
+.wb-chart-sub {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.wb-param-sel {
+  padding: 0.45rem 0.7rem;
+  border: 1.5px solid var(--border);
+  border-radius: 0.5rem;
+  font-size: 0.83rem;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  outline: none;
+  cursor: pointer;
+  min-width: 180px;
+}
+
+.wb-param-sel:focus { border-color: #446ACB; }
+
+/* ── Summary table ── */
+.wb-summary-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.wb-summary-header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--table-head);
+}
+
+.wb-summary-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 0.15rem;
+}
+
+.wb-summary-sub {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.wb-summary-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.wb-summary-wrap::-webkit-scrollbar { height: 5px; }
+.wb-summary-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.wb-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.wbs-th-param {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--table-head);
+  text-align: left;
+  padding: 0.6rem 1rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+  min-width: 170px;
+}
+
+.wbs-th-stn {
+  text-align: center;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 2px solid var(--border);
+  background: var(--table-head);
+  white-space: nowrap;
+  min-width: 80px;
+}
+
+.wbs-stn-id { display: block; }
+
+.wbs-even { background: var(--bg-card); }
+.wbs-odd  { background: var(--row-hover); }
+
+.wbs-td-param {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.wbs-even .wbs-td-param { background: var(--bg-card); }
+.wbs-odd  .wbs-td-param { background: var(--row-hover); }
+
+.wbs-td-val {
+  text-align: right;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.wbs-null {
+  color: var(--text-secondary);
+  opacity: 0.4;
+  text-align: center;
+}
+
+/* ── Station cards grid ── */
+.wb-stations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.wb-stn-card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.wb-stn-num {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.wb-stn-info { flex: 1; min-width: 0; }
+
+.wb-stn-id {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 0.15rem;
+}
+
+.wb-stn-addr {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

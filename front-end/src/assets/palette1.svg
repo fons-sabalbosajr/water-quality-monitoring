@@ -1,0 +1,222 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="80" viewBox="0 0 1600 80">
+            
+            <g>
+                <rect x="0" y="0" width="80" height="80" fill="#eef0fb" />
+                <text x="40" y="36" text-anchor="middle" fill="#101f43" font-family="sans-serif" font-size="14">
+                    50
+                </text>
+                <text x="40" y="54" text-anchor="middle" fill="#101f43" font-family="monospace" font-size="10">
+                    #EEF0FB
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="80" y="0" width="80" height="80" fill="#d6dbf6" />
+                <text x="120" y="36" text-anchor="middle" fill="#101f43" font-family="sans-serif" font-size="14">
+                    100
+                </text>
+                <text x="120" y="54" text-anchor="middle" fill="#101f43" font-family="monospace" font-size="10">
+                    #D6DBF6
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="160" y="0" width="80" height="80" fill="#b0bcef" />
+                <text x="200" y="36" text-anchor="middle" fill="#101f43" font-family="sans-serif" font-size="14">
+                    200
+                </text>
+                <text x="200" y="54" text-anchor="middle" fill="#101f43" font-family="monospace" font-size="10">
+                    #B0BCEF
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="240" y="0" width="80" height="80" fill="#a5b3ed" />
+                <text x="280" y="36" text-anchor="middle" fill="#101f43" font-family="sans-serif" font-size="14">
+                    300
+                </text>
+                <text x="280" y="54" text-anchor="middle" fill="#101f43" font-family="monospace" font-size="10">
+                    #A5B3ED
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="320" y="0" width="80" height="80" fill="#95a6ea" />
+                <text x="360" y="36" text-anchor="middle" fill="#101f43" font-family="sans-serif" font-size="14">
+                    400
+                </text>
+                <text x="360" y="54" text-anchor="middle" fill="#101f43" font-family="monospace" font-size="10">
+                    #95A6EA
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="400" y="0" width="80" height="80" fill="#8298e6" />
+                <text x="440" y="36" text-anchor="middle" fill="#101f43" font-family="sans-serif" font-size="14">
+                    500
+                </text>
+                <text x="440" y="54" text-anchor="middle" fill="#101f43" font-family="monospace" font-size="10">
+                    #8298E6
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="480" y="0" width="80" height="80" fill="#6d89e2" />
+                <text x="520" y="36" text-anchor="middle" fill="#101f43" font-family="sans-serif" font-size="14">
+                    600
+                </text>
+                <text x="520" y="54" text-anchor="middle" fill="#101f43" font-family="monospace" font-size="10">
+                    #6D89E2
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="560" y="0" width="80" height="80" fill="#5579dd" />
+                <text x="600" y="36" text-anchor="middle" fill="#000" font-family="sans-serif" font-size="14">
+                    700
+                </text>
+                <text x="600" y="54" text-anchor="middle" fill="#000" font-family="monospace" font-size="10">
+                    #5579DD
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="640" y="0" width="80" height="80" fill="#446acb" />
+                <text x="680" y="36" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="14">
+                    800
+                </text>
+                <text x="680" y="54" text-anchor="middle" fill="#fff" font-family="monospace" font-size="10">
+                    #446ACB
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="720" y="0" width="80" height="80" fill="#395baf" />
+                <text x="760" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    900
+                </text>
+                <text x="760" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #395BAF
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="800" y="0" width="80" height="80" fill="#3453a2" />
+                <text x="840" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1000
+                </text>
+                <text x="840" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #3453A2
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="880" y="0" width="80" height="80" fill="#2f4b94" />
+                <text x="920" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1100
+                </text>
+                <text x="920" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #2F4B94
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="960" y="0" width="80" height="80" fill="#2a4486" />
+                <text x="1000" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1200
+                </text>
+                <text x="1000" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #2A4486
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="1040" y="0" width="80" height="80" fill="#253c78" />
+                <text x="1080" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1300
+                </text>
+                <text x="1080" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #253C78
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="1120" y="0" width="80" height="80" fill="#1f356b" />
+                <text x="1160" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1400
+                </text>
+                <text x="1160" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #1F356B
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="1200" y="0" width="80" height="80" fill="#1a2d5d" />
+                <text x="1240" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1500
+                </text>
+                <text x="1240" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #1A2D5D
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="1280" y="0" width="80" height="80" fill="#152650" />
+                <text x="1320" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1600
+                </text>
+                <text x="1320" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #152650
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="1360" y="0" width="80" height="80" fill="#101f43" />
+                <text x="1400" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1700
+                </text>
+                <text x="1400" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #101F43
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="1440" y="0" width="80" height="80" fill="#0c1736" />
+                <text x="1480" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1800
+                </text>
+                <text x="1480" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #0C1736
+                </text>
+            </g>
+        
+
+            <g>
+                <rect x="1520" y="0" width="80" height="80" fill="#071028" />
+                <text x="1560" y="36" text-anchor="middle" fill="#d6dbf6" font-family="sans-serif" font-size="14">
+                    1900
+                </text>
+                <text x="1560" y="54" text-anchor="middle" fill="#d6dbf6" font-family="monospace" font-size="10">
+                    #071028
+                </text>
+            </g>
+        
+        </svg>
