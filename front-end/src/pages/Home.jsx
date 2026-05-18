@@ -1,11 +1,13 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { Fragment, useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import * as XLSX from 'xlsx';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, Cell,
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  CartesianGrid,
 } from 'recharts';
+import stationWorkbookUrl from '../../docs/wqm_stations.xlsx?url';
 import bagongLogo from '../assets/bagongpilipinaslogo.png';
 import embLogo from '../assets/emblogo.svg';
 import wqmData from '../data/wqm2026.json';
@@ -17,169 +19,615 @@ import {
   IcoChevronDown, IcoChevronRight, IcoCalendar,
   IcoSun, IcoMoon, IcoLogout,
 } from '../components/Icons';
+import {
+  GAUGE_PARAMS, MONTHS_SHORT, PARAM_LIMITS, PARAM_ORDER, fmt, fmtWithUnit, getAvailableParams,
+  getAverageNumber, getGaugePercent, getLatestNumber, getMonthlyNumber, getObservationEntries,
+  getParamData, getParamStatus, getParamUnit, getStations, hasNumericReading, toTitle,
+} from '../utils/wqmData';
 import './Home.css';
 
 /* ── Constants ── */
-const CHART_PARAMS = [
-  'DO (mg/L)', 'BOD (mg/L)', 'TSS (mg/L)', 'pH',
-  'Temp. (°C)', 'Color (TCU)', 'Fecal Coliform (MPN/100mL)',
-  'NO3-N (mg/L)', 'PO4-P (mg/L)', 'Cl- (mg/L)', 'Oil and Grease',
-];
+const CHART_PARAMS = PARAM_ORDER;
 
 const CHART_COLORS = [
   '#446ACB','#7CB675','#e07b54','#a78bfa','#f59e0b',
   '#06b6d4','#ec4899','#84cc16','#f97316','#64748b','#10b981',
 ];
 
-const WATERBODIES = Object.entries(wqmData).map(([key, val]) => ({
-  key,
-  name: val.name ? toTitle(val.name) : toTitle(key),
-  classInfo: val.classInfo || '',
-  stationCount: (val.stations || []).length,
+const WATERBODIES = Object.entries(wqmData)
+  .map(([key, val]) => ({
+    key,
+    name: val.name ? toTitle(val.name) : toTitle(key),
+    classInfo: val.classInfo || '',
+    stations: getStations(val),
+  }))
+  .filter((waterbody) => waterbody.stations.some(hasNumericReading))
+  .map(({ stations, ...waterbody }) => ({
+    ...waterbody,
+    stationCount: stations.length,
+  }));
+
+const normalizeForMatch = (value) => String(value || '')
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim();
+
+const MAP_TILE_SIZE = 256;
+const MAP_VIEW = { width: 640, height: 220 };
+
+const buildStationTrendData = (stationSeries, param) => MONTHS_SHORT.map((label, monthIndex) => {
+  const point = { label };
+  stationSeries.forEach(({ station, chartKey }) => {
+    point[chartKey] = getMonthlyNumber(getParamData(station, param), monthIndex);
+  });
+  return point;
+});
+
+const buildStationGaugeData = (stations, params) => stations.map((station) => ({
+  station,
+  metrics: params.map((param) => {
+    const value = getLatestNumber(getParamData(station, param));
+    return {
+      param,
+      value,
+      percent: getGaugePercent(param, value),
+      status: getParamStatus(param, value),
+      unit: PARAM_LIMITS[param]?.unit || '',
+      label: PARAM_LIMITS[param]?.unit ? fmtWithUnit(value, param) : fmt(value),
+      verdict: getParamStatus(param, value) === 'alert' ? 'Failed' : 'Pass',
+    };
+  }).filter((metric) => metric.value !== null),
 }));
 
-const toTitle = (str) =>
-  str.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+const getLatestMonthLabel = (stations, params) => {
+  for (let monthIndex = MONTHS_SHORT.length - 1; monthIndex >= 0; monthIndex -= 1) {
+    const hasReading = stations.some((station) => params.some((param) => (
+      getMonthlyNumber(getParamData(station, param), monthIndex) !== null
+    )));
+    if (hasReading) return `${MONTHS_SHORT[monthIndex]} 2026`;
+  }
+  return 'Annual 2026';
+};
 
-/* Abbreviate long waterbody names for chart X-axis */
-const abbrev = (name, maxLen = 10) =>
-  name.length <= maxLen ? name : name.split(' ').map((w) => w[0]).join('');
+const pearson = (pairs) => {
+  if (pairs.length < 2) return null;
+  const xs = pairs.map(([x]) => x);
+  const ys = pairs.map(([, y]) => y);
+  const xMean = xs.reduce((sum, value) => sum + value, 0) / xs.length;
+  const yMean = ys.reduce((sum, value) => sum + value, 0) / ys.length;
+  const numerator = pairs.reduce((sum, [x, y]) => sum + ((x - xMean) * (y - yMean)), 0);
+  const xDen = Math.sqrt(xs.reduce((sum, value) => sum + ((value - xMean) ** 2), 0));
+  const yDen = Math.sqrt(ys.reduce((sum, value) => sum + ((value - yMean) ** 2), 0));
+  if (!xDen || !yDen) return null;
+  return numerator / (xDen * yDen);
+};
 
-/* Build chart data: each sheet → average of all stations for a param */
-const buildChartData = (param) =>
-  Object.entries(wqmData).map(([key, sheet]) => {
-    const vals = (sheet.stations || [])
-      .map((s) => {
-        const p = s.params[param] || s.params['Temp. (OC)' ] ;
-        if (!p) return null;
-        return typeof p.avg === 'number' ? p.avg : null;
-      })
-      .filter((v) => v !== null);
+const buildCorrelationMatrix = (stations, params) => {
+  const selectedParams = params.slice(0, 6);
+  return selectedParams.map((rowParam) => ({
+    param: rowParam,
+    cells: selectedParams.map((colParam) => {
+      const monthlyPairs = stations.flatMap((station) => {
+        const rowData = getParamData(station, rowParam);
+        const colData = getParamData(station, colParam);
+        return Array.from({ length: 12 }, (_, monthIndex) => [
+          getMonthlyNumber(rowData, monthIndex),
+          getMonthlyNumber(colData, monthIndex),
+        ]).filter(([x, y]) => x !== null && y !== null);
+      });
+      const annualPairs = stations
+        .map((station) => [
+          getAverageNumber(getParamData(station, rowParam)),
+          getAverageNumber(getParamData(station, colParam)),
+        ])
+        .filter(([x, y]) => x !== null && y !== null);
+      const pairs = monthlyPairs.length >= 2 ? monthlyPairs : annualPairs;
+      return {
+        rowParam,
+        colParam,
+        value: rowParam === colParam ? 1 : pearson(pairs),
+      };
+    }),
+  }));
+};
+
+const getCorrelationColor = (value) => {
+  if (value === null) return 'rgba(148,163,184,0.18)';
+  const intensity = Math.min(Math.abs(value), 1);
+  if (value >= 0) return `rgba(68,106,203,${0.16 + intensity * 0.68})`;
+  return `rgba(224,123,84,${0.16 + intensity * 0.68})`;
+};
+
+const getCorrelationInterpretation = (matrix) => {
+  const pairs = matrix.flatMap((row) => row.cells
+    .filter((cell) => cell.rowParam !== cell.colParam && cell.value !== null)
+    .map((cell) => cell));
+
+  if (!pairs.length) return 'Not enough paired station values are available to calculate relationships for this waterbody.';
+
+  const strongestPositive = pairs
+    .filter((cell) => cell.value > 0)
+    .sort((a, b) => b.value - a.value)[0];
+  const strongestNegative = pairs
+    .filter((cell) => cell.value < 0)
+    .sort((a, b) => a.value - b.value)[0];
+
+  const parts = [];
+  if (strongestPositive) {
+    parts.push(`${strongestPositive.rowParam} and ${strongestPositive.colParam} move together most strongly (r=${strongestPositive.value.toFixed(2)}).`);
+  }
+  if (strongestNegative) {
+    parts.push(`${strongestNegative.rowParam} and ${strongestNegative.colParam} show the strongest inverse movement (r=${strongestNegative.value.toFixed(2)}).`);
+  }
+
+  return parts.join(' ');
+};
+
+const projectMapPoint = (lat, lng, zoom) => {
+  const safeLat = Math.max(Math.min(lat, 85.05112878), -85.05112878);
+  const scale = MAP_TILE_SIZE * (2 ** zoom);
+  const sinLat = Math.sin((safeLat * Math.PI) / 180);
+  return {
+    x: ((lng + 180) / 360) * scale,
+    y: (0.5 - (Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI))) * scale,
+  };
+};
+
+const getMapZoom = (bounds) => {
+  const northWest = projectMapPoint(bounds.maxLat, bounds.minLng, 0);
+  const southEast = projectMapPoint(bounds.minLat, bounds.maxLng, 0);
+  const worldWidth = Math.max(Math.abs(southEast.x - northWest.x), 0.0001);
+  const worldHeight = Math.max(Math.abs(southEast.y - northWest.y), 0.0001);
+  const zoomX = Math.floor(Math.log2((MAP_VIEW.width * 0.82) / worldWidth));
+  const zoomY = Math.floor(Math.log2((MAP_VIEW.height * 0.72) / worldHeight));
+  return Math.max(8, Math.min(15, Math.min(zoomX, zoomY)));
+};
+
+const buildTileMap = (bounds, locations) => {
+  if (!bounds || !locations.length) return null;
+  const zoom = getMapZoom(bounds);
+  const centerLat = (bounds.minLat + bounds.maxLat) / 2;
+  const centerLng = (bounds.minLng + bounds.maxLng) / 2;
+  const center = projectMapPoint(centerLat, centerLng, zoom);
+  const origin = {
+    x: center.x - (MAP_VIEW.width / 2),
+    y: center.y - (MAP_VIEW.height / 2),
+  };
+  const startX = Math.floor(origin.x / MAP_TILE_SIZE);
+  const endX = Math.floor((origin.x + MAP_VIEW.width) / MAP_TILE_SIZE);
+  const startY = Math.floor(origin.y / MAP_TILE_SIZE);
+  const endY = Math.floor((origin.y + MAP_VIEW.height) / MAP_TILE_SIZE);
+  const maxTile = 2 ** zoom;
+  const tiles = [];
+
+  for (let x = startX; x <= endX; x += 1) {
+    for (let y = startY; y <= endY; y += 1) {
+      if (y >= 0 && y < maxTile) {
+        const wrappedX = ((x % maxTile) + maxTile) % maxTile;
+        tiles.push({
+          key: `${zoom}-${wrappedX}-${y}`,
+          url: `https://tile.openstreetmap.org/${zoom}/${wrappedX}/${y}.png`,
+          left: (x * MAP_TILE_SIZE) - origin.x,
+          top: (y * MAP_TILE_SIZE) - origin.y,
+        });
+      }
+    }
+  }
+
+  const pins = locations.map((point, index) => {
+    const projected = projectMapPoint(point.lat, point.lng, zoom);
     return {
-      name: abbrev(sheet.name ? toTitle(sheet.name) : toTitle(key)),
-      fullName: sheet.name ? toTitle(sheet.name) : toTitle(key),
-      value: vals.length ? parseFloat((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2)) : null,
+      ...point,
+      color: CHART_COLORS[index % CHART_COLORS.length],
+      label: point.id || `S${index + 1}`,
+      left: projected.x - origin.x,
+      top: projected.y - origin.y,
     };
-  }).filter((d) => d.value !== null);
+  });
 
-/* Custom tooltip */
-const ChartTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="chart-tooltip">
-      <p className="ct-name">{payload[0]?.payload?.fullName || label}</p>
-      <p className="ct-val">{payload[0]?.value} <span>{payload[0]?.name}</span></p>
-    </div>
-  );
+  return { tiles, pins, zoom };
 };
 
 /* ── Dashboard overview ── */
-const DashboardView = ({ user }) => {
+const DashboardView = () => {
+  const [selectedWaterbody, setSelectedWaterbody] = useState(WATERBODIES[0]?.key || '');
   const [chartParam, setChartParam] = useState(CHART_PARAMS[0]);
+  const [selectedObservationMonth, setSelectedObservationMonth] = useState('');
+  const [stationLocations, setStationLocations] = useState([]);
   const { theme } = useTheme();
-  const chartData = useMemo(() => buildChartData(chartParam), [chartParam]);
-  const paramIdx = CHART_PARAMS.indexOf(chartParam);
-  const barColor = CHART_COLORS[paramIdx] || '#446ACB';
+
+  const sheet = wqmData[selectedWaterbody];
+  const selectedInfo = WATERBODIES.find((waterbody) => waterbody.key === selectedWaterbody) || WATERBODIES[0];
+  const stations = useMemo(() => getStations(sheet), [sheet]);
+  const availableParams = useMemo(() => getAvailableParams(stations, false), [stations]);
+  const activeParam = availableParams.includes(chartParam) ? chartParam : (availableParams[0] || CHART_PARAMS[0]);
+  const activeUnit = getParamUnit(activeParam);
+  const stationSeries = useMemo(() => stations.map((station, index) => ({
+    station,
+    chartKey: `station_${index}`,
+    color: CHART_COLORS[index % CHART_COLORS.length],
+  })), [stations]);
+  const trendData = useMemo(
+    () => buildStationTrendData(stationSeries, activeParam),
+    [activeParam, stationSeries]
+  );
+  const gaugeParams = useMemo(
+    () => GAUGE_PARAMS.filter((param) => availableParams.includes(param)),
+    [availableParams]
+  );
+  const stationGaugeData = useMemo(
+    () => buildStationGaugeData(stations, gaugeParams),
+    [gaugeParams, stations]
+  );
+  const gaugeAsOf = useMemo(() => getLatestMonthLabel(stations, gaugeParams), [gaugeParams, stations]);
+  const correlationParams = useMemo(() => availableParams.slice(0, 6), [availableParams]);
+  const correlationMatrix = useMemo(
+    () => buildCorrelationMatrix(stations, correlationParams),
+    [correlationParams, stations]
+  );
+  const correlationInterpretation = useMemo(
+    () => getCorrelationInterpretation(correlationMatrix),
+    [correlationMatrix]
+  );
+  const observations = useMemo(() => getObservationEntries(stations), [stations]);
+  const observationMonths = useMemo(() => [...new Map(
+    [...observations]
+      .sort((a, b) => b.monthIndex - a.monthIndex)
+      .map((entry) => [entry.month, entry])
+  ).values()].map((entry) => ({ month: entry.month, monthIndex: entry.monthIndex })), [observations]);
+  const activeObservationMonth = observationMonths.some((entry) => entry.month === selectedObservationMonth)
+    ? selectedObservationMonth
+    : (observationMonths[0]?.month || '');
+  const filteredObservations = useMemo(
+    () => observations.filter((entry) => !activeObservationMonth || entry.month === activeObservationMonth),
+    [activeObservationMonth, observations]
+  );
+  const lastTrendIndexByKey = useMemo(() => stationSeries.reduce((lookup, { chartKey }) => {
+    for (let index = trendData.length - 1; index >= 0; index -= 1) {
+      if (trendData[index][chartKey] !== null && trendData[index][chartKey] !== undefined) {
+        lookup[chartKey] = index;
+        break;
+      }
+    }
+    return lookup;
+  }, {}), [stationSeries, trendData]);
   const gridColor = theme === 'dark' ? '#2d4a6a' : '#E2E8F6';
   const textColor = theme === 'dark' ? '#94a3b8' : '#64748b';
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadStationLocations = async () => {
+      try {
+        const response = await fetch(stationWorkbookUrl);
+        const buffer = await response.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: 'array' });
+        const workbookSheet = workbook.Sheets.Station_List || workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(workbookSheet, { defval: '' });
+        const locations = rows
+          .map((row) => ({
+            id: row.ID,
+            station: String(row.Station || '').trim(),
+            waterbody: String(row['Waterbody Loc'] || '').trim(),
+            barangay: String(row.Barangay || '').trim(),
+            province: String(row.Province || '').trim(),
+            lat: Number(row.LAT),
+            lng: Number(row.LONG),
+          }))
+          .filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng));
+
+        if (!cancelled) setStationLocations(locations);
+      } catch {
+        if (!cancelled) setStationLocations([]);
+      }
+    };
+
+    loadStationLocations();
+    return () => { cancelled = true; };
+  }, []);
+
+  const selectedLocations = useMemo(() => {
+    const waterbodyKey = normalizeForMatch(selectedWaterbody);
+    const waterbodyName = normalizeForMatch(selectedInfo?.name);
+    const matchedByWaterbodyLoc = stationLocations.filter((location) => {
+      const workbookWaterbody = normalizeForMatch(location.waterbody);
+      return workbookWaterbody && (
+        waterbodyKey.includes(workbookWaterbody) ||
+        workbookWaterbody.includes(waterbodyKey) ||
+        waterbodyName.includes(workbookWaterbody) ||
+        workbookWaterbody.includes(waterbodyName)
+      );
+    });
+
+    if (matchedByWaterbodyLoc.length) return matchedByWaterbodyLoc;
+
+    const stationNames = stations.map((station) => normalizeForMatch(station.stnId));
+    return stationLocations.filter((location) => {
+      const workbookStation = normalizeForMatch(location.station);
+      return stationNames.some((stationName) => stationName && (
+        workbookStation.includes(stationName) || stationName.includes(workbookStation)
+      ));
+    });
+  }, [selectedInfo?.name, selectedWaterbody, stationLocations, stations]);
+
+  const mapBounds = useMemo(() => {
+    if (!selectedLocations.length) return null;
+    const lats = selectedLocations.map((point) => point.lat);
+    const lngs = selectedLocations.map((point) => point.lng);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+    const latPad = Math.max((maxLat - minLat) * 0.22, 0.025);
+    const lngPad = Math.max((maxLng - minLng) * 0.22, 0.025);
+    return {
+      minLat: minLat - latPad,
+      maxLat: maxLat + latPad,
+      minLng: minLng - lngPad,
+      maxLng: maxLng + lngPad,
+    };
+  }, [selectedLocations]);
+
+  const tileMap = useMemo(() => buildTileMap(mapBounds, selectedLocations), [mapBounds, selectedLocations]);
+
+  const mapCenter = selectedLocations[0];
+  const mapLink = mapCenter
+    ? `https://www.openstreetmap.org/?mlat=${mapCenter.lat}&mlon=${mapCenter.lng}#map=13/${mapCenter.lat}/${mapCenter.lng}`
+    : 'https://www.openstreetmap.org/';
+
   return (
   <div className="dashboard-overview">
-    <div className="overview-hero">
+    <section className="dashboard-control-header">
       <div>
-        <p className="overview-eyebrow">Water Quality Monitoring System</p>
-        <h2 className="overview-title">Welcome, <span>{user?.name}</span></h2>
-        <p className="overview-sub">Environmental Management Bureau &middot; Region III &middot; Central Luzon</p>
+        <p className="overview-eyebrow">CY 2026 Monitoring Dashboard</p>
+        <h2 className="overview-title">{selectedInfo?.name || 'Waterbody Dashboard'}</h2>
+        <p className="overview-sub">Station trends, field notes, location data, and parameter relationships.</p>
       </div>
-      <div className="overview-stat-row">
-        <div className="ov-stat"><strong>{WATERBODIES.length}</strong><span>Waterbodies</span></div>
-        <div className="ov-stat-div" />
-        <div className="ov-stat"><strong>3</strong><span>Years</span></div>
-        <div className="ov-stat-div" />
-        <div className="ov-stat"><strong>11</strong><span>Parameters</span></div>
+      <div className="dashboard-controls">
+        <label>
+          <span>Waterbody</span>
+          <select value={selectedWaterbody} onChange={(event) => setSelectedWaterbody(event.target.value)}>
+            {WATERBODIES.map((waterbody) => (
+              <option key={waterbody.key} value={waterbody.key}>{waterbody.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Parameter</span>
+          <select value={activeParam} onChange={(event) => setChartParam(event.target.value)}>
+            {availableParams.map((param) => (
+              <option key={param} value={param}>{param}</option>
+            ))}
+          </select>
+        </label>
       </div>
-    </div>
+    </section>
 
-    {/* ── Parameter Summary Chart ── */}
-    <div className="chart-card">
-      <div className="chart-card-header">
-        <div>
-          <h3 className="chart-title">Parameter Summary — All Waterbodies</h3>
-          <p className="chart-sub">Average value across monitoring stations per waterbody · CY 2026</p>
+    <section className="dashboard-summary-strip">
+      <div><span className="summary-icon"><IcoWater size={16} /></span><strong>{stations.length}</strong><span>Stations</span></div>
+      <div><span className="summary-icon"><IcoTable size={16} /></span><strong>{availableParams.length}</strong><span>Parameters</span></div>
+      <div><span className="summary-icon"><IcoDashboard size={16} /></span><strong>{selectedLocations.length || '—'}</strong><span>Mapped Locations</span></div>
+      <div><span className="summary-icon"><IcoCalendar size={16} /></span><strong>{observations.length}</strong><span>Observations</span></div>
+    </section>
+
+    <section className="dashboard-primary-grid">
+      <article className="chart-card station-trend-card">
+        <div className="chart-card-header">
+          <div>
+            <h3 className="chart-title">Parameter Summary — Monthly Station Trends</h3>
+            <p className="chart-sub">{activeParam}{activeUnit ? ` (${activeUnit})` : ''} readings per monitoring station · {selectedInfo?.name}</p>
+          </div>
         </div>
-        <select
-          className="chart-param-sel"
-          value={chartParam}
-          onChange={(e) => setChartParam(e.target.value)}
-        >
-          {CHART_PARAMS.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
-      </div>
-      <div className="chart-wrap">
-        <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 60 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
-            <XAxis
-              dataKey="name"
-              tick={{ fontSize: 9.5, fill: textColor }}
-              angle={-45}
-              textAnchor="end"
-              interval={0}
-              tickLine={false}
-              axisLine={false}
-            />
-            <YAxis
-              tick={{ fontSize: 10, fill: textColor }}
-              tickLine={false}
-              axisLine={false}
-              width={42}
-            />
-            <Tooltip content={<ChartTooltip />} cursor={{ fill: theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(68,106,203,0.07)' }} />
-            <Bar dataKey="value" name={chartParam} radius={[4, 4, 0, 0]}>
-              {chartData.map((_, i) => (
-                <Cell key={i} fill={barColor} fillOpacity={0.75 + (i % 3) * 0.08} />
+        <div className="chart-wrap">
+          <ResponsiveContainer width="100%" height={340}>
+            <AreaChart data={trendData} margin={{ top: 10, right: 16, left: 0, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: textColor }} tickLine={false} axisLine={false} />
+              <YAxis
+                tick={{ fontSize: 11, fill: textColor }}
+                tickLine={false}
+                axisLine={false}
+                width={58}
+                label={activeUnit ? { value: activeUnit, angle: -90, position: 'insideLeft', fill: textColor, fontSize: 11 } : undefined}
+              />
+              <Tooltip formatter={(value, name) => [fmtWithUnit(value, activeParam), name]} />
+              {stationSeries.map(({ station, chartKey, color }) => (
+                <Area
+                  key={chartKey}
+                  type="monotone"
+                  dataKey={chartKey}
+                  name={station.stnId}
+                  stroke={color}
+                  fill={color}
+                  fillOpacity={0.1}
+                  strokeWidth={2.2}
+                  dot={(dotProps) => {
+                    const { cx, cy, index } = dotProps;
+                    if (cx === undefined || cy === undefined) return null;
+                    const isLatest = lastTrendIndexByKey[chartKey] === index;
+                    return (
+                      <g>
+                        {isLatest && <circle className="trend-pulse-ring" cx={cx} cy={cy} r="7" fill={color} />}
+                        <circle className={isLatest ? 'trend-last-dot' : ''} cx={cx} cy={cy} r={isLatest ? 4.5 : 3} fill={color} stroke="var(--bg-card)" strokeWidth="2" />
+                      </g>
+                    );
+                  }}
+                  activeDot={{ r: 6 }}
+                  connectNulls
+                />
               ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </article>
 
-    <div className="overview-guide-card">
-      <h3 className="guide-card-title">Quick Guide</h3>
-      <div className="guide-steps">
-        <div className="guide-step">
-          <span className="step-num">01</span>
+      <article className="dash-panel map-panel">
+        <div className="dash-panel-header">
           <div>
-            <strong>Browse Waterbodies</strong>
-            <p>Select a waterbody from the sidebar to view its monitoring profile and historical trend.</p>
+            <h3>Station Location Map</h3>
           </div>
+          <a className="earth-open-link" href={mapLink} target="_blank" rel="noreferrer">Open Map</a>
         </div>
-        <div className="guide-step">
-          <span className="step-num">02</span>
-          <div>
-            <strong>View Tabular Results</strong>
-            <p>Access structured monthly data by year via Tabular Results &rarr; 2026.</p>
+        {tileMap ? (
+          <div className="osm-map-wrap">
+            <div className="osm-map" role="img" aria-label={`${selectedInfo?.name} plotted station map`}>
+              {tileMap.tiles.map((tile) => (
+                <img
+                  key={tile.key}
+                  className="osm-tile"
+                  src={tile.url}
+                  alt=""
+                  style={{ left: tile.left, top: tile.top }}
+                  loading="lazy"
+                />
+              ))}
+            </div>
+            <div className="map-pin-layer" aria-hidden="true">
+              {tileMap.pins.map((point) => (
+                <span
+                  key={`${point.id}-${point.lat}-${point.lng}`}
+                  className="map-pin"
+                  style={{ left: `${point.left}px`, top: `${point.top}px`, '--pin-color': point.color }}
+                >
+                  <b>{point.label}</b>
+                  <small>{point.station || point.id}</small>
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
-        <div className="guide-step">
-          <span className="step-num">03</span>
-          <div>
-            <strong>Export Data</strong>
-            <p>Download station data as CSV for offline analysis and reporting.</p>
+        ) : (
+          <div className="map-empty-state">No mapped station coordinates matched this waterbody.</div>
+        )}
+        {tileMap && (
+          <div className="map-legend">
+            {tileMap.pins.map((point) => (
+              <span key={`${point.id}-legend`}>
+                <i style={{ background: point.color }} />
+                {point.label} · {point.station || point.id}
+              </span>
+            ))}
           </div>
+        )}
+      </article>
+    </section>
+
+    <section className="dash-panel station-gauge-panel">
+      <div className="dash-panel-header">
+        <div>
+          <h3>Station Parameter Gauge Metrics</h3>
+          <p>Latest available readings against reference limits for each monitoring station</p>
         </div>
-        <div className="guide-step">
-          <span className="step-num">04</span>
-          <div>
-            <strong>Manage System</strong>
-            <p>Administrators can manage user accounts and system settings.</p>
-          </div>
-        </div>
+        <span className="gauge-as-of">As of {gaugeAsOf}</span>
       </div>
-    </div>
+      <div className="station-gauge-table-wrap">
+        <table className="station-gauge-table">
+          <thead>
+            <tr>
+              <th>Station</th>
+              {gaugeParams.map((param) => <th key={param}>{param}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {stationGaugeData.map(({ station, metrics }) => {
+              const metricLookup = Object.fromEntries(metrics.map((metric) => [metric.param, metric]));
+              return (
+                <tr key={station.stnId}>
+                  <td className="station-gauge-station">
+                    <strong>{station.stnId}</strong>
+                    <span>{station.address}</span>
+                  </td>
+                  {gaugeParams.map((param) => {
+                    const metric = metricLookup[param];
+                    return (
+                      <td key={param}>
+                        {metric ? (
+                          <div className={`rect-gauge status-${metric.status}`}>
+                            <div>
+                              <strong>{metric.label}</strong>
+                              <span className={`gauge-verdict ${metric.verdict.toLowerCase()}`}>{metric.unit || metric.verdict}</span>
+                            </div>
+                            <i style={{ '--pct': `${metric.percent}%` }} />
+                          </div>
+                        ) : <span className="gauge-empty">—</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section className="dashboard-analysis-grid">
+      <article className="dash-panel correlation-panel">
+        <div className="dash-panel-header">
+          <div>
+            <h3>Parameter Correlation</h3>
+            <p>X and Y axes compare station annual values within {selectedInfo?.name}</p>
+          </div>
+        </div>
+        <div className="correlation-wrap">
+          <div className="correlation-grid" style={{ '--corr-size': correlationParams.length }}>
+            <span className="corr-corner">Y \ X</span>
+            {correlationParams.map((param) => <span key={param} className="corr-head" title={param}>{param}</span>)}
+            {correlationMatrix.map((row) => (
+              <Fragment key={row.param}>
+                <span className="corr-row-head" title={row.param}>{row.param}</span>
+                {row.cells.map((cell) => (
+                  <span
+                    key={`${cell.rowParam}-${cell.colParam}`}
+                    className="corr-cell"
+                    style={{ background: getCorrelationColor(cell.value) }}
+                    title={`${cell.rowParam} vs ${cell.colParam}: ${cell.value === null ? 'No data' : cell.value.toFixed(2)}`}
+                  >
+                    {cell.value === null ? '—' : cell.value.toFixed(2)}
+                  </span>
+                ))}
+              </Fragment>
+            ))}
+          </div>
+        </div>
+        <div className="corr-legend">
+          <span><i className="corr-neg" />Negative</span>
+          <span><i className="corr-pos" />Positive</span>
+        </div>
+        <div className="corr-interpretation">
+          <strong>Interpretation</strong>
+          <p>{correlationInterpretation}</p>
+        </div>
+      </article>
+
+      <article className="dash-panel observation-panel observation-panel-side">
+        <div className="dash-panel-header">
+          <div>
+            <h3>Observation Panel</h3>
+            <p>Field notes recorded for {selectedInfo?.name}</p>
+          </div>
+          <select
+            className="observation-month-filter"
+            value={activeObservationMonth}
+            onChange={(event) => setSelectedObservationMonth(event.target.value)}
+          >
+            {observationMonths.map((entry) => (
+              <option key={entry.month} value={entry.month}>{entry.month}</option>
+            ))}
+          </select>
+        </div>
+        <div className="observation-list observation-list-side">
+          {filteredObservations.length ? filteredObservations.map((entry) => (
+            <article key={`${entry.station.stnId}-${entry.month}`} className="observation-item">
+              <span className="observation-icon">i</span>
+              <div>
+                <strong>{entry.month} · {entry.station.stnId}</strong>
+                <p>{entry.value}</p>
+              </div>
+            </article>
+          )) : <div className="map-empty-state">No observations are available for this filter.</div>}
+        </div>
+      </article>
+    </section>
   </div>
   );
 };
@@ -205,6 +653,8 @@ const Home = () => {
   const [activeView, setActiveView] = useState('dashboard');
   const [tabularOpen, setTabularOpen] = useState(false);
   const [waterbodiesOpen, setWaterbodiesOpen] = useState(false);
+  const [developerOpen, setDeveloperOpen] = useState(false);
+  const [developerSection, setDeveloperSection] = useState('accounts');
   const [activeWaterbody, setActiveWaterbody] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
@@ -228,6 +678,11 @@ const Home = () => {
     setActiveView('waterbody');
   };
 
+  const navDeveloper = (section) => {
+    setDeveloperSection(section);
+    setActiveView('developer-manager');
+  };
+
   const handleLogout = () => { logout(); navigate('/login'); };
 
   const pageTitle = {
@@ -235,9 +690,10 @@ const Home = () => {
     'tabular-2026': 'Tabular Results — 2026',
     'tabular-2025': 'Tabular Results — 2025',
     'tabular-2024': 'Tabular Results — 2024',
-    settings:       'Settings',
+    'developer-manager': 'Developer Manager',
     waterbody:      WATERBODIES.find((w) => w.key === activeWaterbody)?.name || 'Waterbody Profile',
   }[activeView] || 'Dashboard';
+  const hideTopbar = activeView.startsWith('tabular');
 
   return (
     <div className="dashboard">
@@ -326,13 +782,35 @@ const Home = () => {
             <>
               <p className="nav-section-label">System</p>
               <button
-                className={`nav-item${activeView === 'settings' ? ' active' : ''}`}
-                onClick={() => nav('settings')}
+                className={`nav-item nav-group-toggle${developerOpen || activeView === 'developer-manager' ? ' open' : ''}`}
+                onClick={() => setDeveloperOpen((open) => !open)}
               >
                 <IcoSettings size={15} />
-                <span className="nav-label">Settings</span>
+                <span className="nav-label">Developer Manager</span>
                 <span className="nav-badge-admin">admin</span>
+                <span className="nav-chevron-icon">
+                  {developerOpen ? <IcoChevronDown size={12} /> : <IcoChevronRight size={12} />}
+                </span>
               </button>
+              {developerOpen && (
+                <div className="nav-sub-group">
+                  {[
+                    ['accounts', 'User Accounts'],
+                    ['approvals', 'Sign Up Approvals'],
+                    ['runtime', 'App Runtime Status'],
+                    ['database', 'Database Status'],
+                  ].map(([section, label]) => (
+                    <button
+                      key={section}
+                      className={`nav-item nav-sub-item${activeView === 'developer-manager' && developerSection === section ? ' active' : ''}`}
+                      onClick={() => navDeveloper(section)}
+                    >
+                      <span className="nav-wb-dot" />
+                      <span className="nav-label">{label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </>
           )}
         </nav>
@@ -354,7 +832,7 @@ const Home = () => {
 
       {/* ── Main content ── */}
       <main className="main-content">
-        <header className="topbar">
+        {!hideTopbar && <header className={`topbar${activeView === 'dashboard' ? ' dashboard-header' : ''}`}>
           <div className="topbar-left">
             <h2 className="page-title">{pageTitle}</h2>
             <p className="page-subtitle">EMBR3 Water Quality Monitoring System &middot; Region III</p>
@@ -391,21 +869,25 @@ const Home = () => {
               )}
             </div>
           </div>
-        </header>
+        </header>}
 
         <div className="content-area">
-          {activeView === 'dashboard'    && <DashboardView user={user} />}
+          {activeView === 'dashboard'    && <DashboardView />}
           {activeView === 'tabular-2026' && <WQM2026 />}
           {activeView === 'tabular-2025' && <YearPlaceholder year={2025} />}
           {activeView === 'tabular-2024' && <YearPlaceholder year={2024} />}
-          {activeView === 'settings'     && <Settings />}
+          {activeView === 'developer-manager' && <Settings key={developerSection} initialSection={developerSection} />}
           {activeView === 'waterbody'    && activeWaterbody && (
             <WaterbodyProfile waterbodyKey={activeWaterbody} />
           )}
         </div>
+        <footer className="app-footer">
+          <span>EMBR3 Water Quality Monitoring System</span>
+          <span>Environmental Management Bureau Region III · CY 2026</span>
+        </footer>
       </main>
     </div>
   );
 };
 
-export default Home;
+export default Home;

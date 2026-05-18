@@ -11,6 +11,7 @@ const Register = () => {
 
   const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleChange = (e) =>
@@ -23,10 +24,16 @@ const Register = () => {
       return;
     }
     setError('');
+    setSuccess('');
     setLoading(true);
     try {
-      await register(form.name, form.email, form.password);
-      navigate('/');
+      const data = await register(form.name, form.email, form.password);
+      if (data.token) {
+        navigate('/');
+        return;
+      }
+      setSuccess(data.message || 'Registration submitted. Please wait for administrator approval before signing in.');
+      setForm({ name: '', email: '', password: '' });
     } catch (err) {
       setError(err.response?.data?.message || 'Registration failed. Please try again.');
     } finally {
@@ -53,6 +60,12 @@ const Register = () => {
         {error && (
           <div className="alert alert-error" role="alert">
             <span>⚠</span> {error}
+          </div>
+        )}
+
+        {success && (
+          <div className="alert alert-success" role="status">
+            <span>i</span> {success}
           </div>
         )}
 

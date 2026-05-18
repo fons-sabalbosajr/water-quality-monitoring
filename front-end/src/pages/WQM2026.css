@@ -187,6 +187,28 @@
   color: #fff;
 }
 
+.add-btn {
+  background: #DDF8DA;
+  color: #355232;
+}
+
+.reset-btn {
+  background: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .add-btn { background: rgba(124,182,117,0.2); color: #86efac; }
+
+.wqm-secure-note {
+  margin: 0.75rem 1.5rem 0;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.78rem;
+}
+
 /* ── Excel-template table ── */
 .wqm-table-wrap {
   overflow-x: auto;
@@ -207,10 +229,32 @@
   min-width: 100%;
 }
 
+.wqm-group-row th {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  padding: 0.48rem 0.55rem;
+  background: #253C78;
+  color: #fff;
+  border-bottom: 1px solid rgba(255,255,255,0.2);
+  font-size: 0.65rem;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.wqm-group-sticky {
+  left: 0;
+  min-width: 324px;
+  text-align: left !important;
+}
+
+[data-theme='dark'] .wqm-group-row th { background: #1a3050; }
+
 /* Sticky header row */
 .wqm-thead-row th {
   position: sticky;
-  top: 0;
+  top: 30px;
   z-index: 3;
   padding: 0.55rem 0.45rem;
   font-size: 0.67rem;
@@ -254,7 +298,8 @@
 
 /* Month columns */
 .col-month { width: 40px; min-width: 40px; text-align: right; }
-.col-avg   { min-width: 56px; text-align: right; border-left: 2px solid var(--border); }
+.col-avg   { min-width: 76px; text-align: right; border-left: 2px solid #446ACB; }
+.col-actions { min-width: 82px; text-align: center; border-left: 1px solid var(--border); }
 
 /* ── Body rows ── */
 .prow { vertical-align: middle; }
@@ -321,6 +366,26 @@
 
 [data-theme='dark'] .grp-odd { background: #1a2a3a; }
 
+.wqm-table tbody tr:hover {
+  background: rgba(68,106,203,0.08);
+}
+
+.wqm-table tbody tr:hover .td-s0,
+.wqm-table tbody tr:hover .td-s1,
+.wqm-table tbody tr:hover .td-s2 {
+  background: #EEF0FB;
+}
+
+[data-theme='dark'] .wqm-table tbody tr:hover {
+  background: rgba(124,182,117,0.12);
+}
+
+[data-theme='dark'] .wqm-table tbody tr:hover .td-s0,
+[data-theme='dark'] .wqm-table tbody tr:hover .td-s1,
+[data-theme='dark'] .wqm-table tbody tr:hover .td-s2 {
+  background: #173229;
+}
+
 /* Station ID / address cell */
 .stn-id-txt {
   display: block;
@@ -363,8 +428,87 @@
   font-variant-numeric: tabular-nums;
   color: #446ACB;
   padding: 0.32rem 0.55rem;
-  border-left: 2px solid var(--border);
+  border-left: 2px solid #446ACB;
   border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-card) 90%, #446ACB 10%);
+}
+
+[data-theme='dark'] .td-avg {
+  background: rgba(68,106,203,0.12);
+  color: #93c5fd;
+}
+
+.td-actions {
+  text-align: center;
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+}
+
+.grp-odd .td-actions { background: var(--row-hover); }
+
+[data-theme='dark'] .grp-odd .td-actions { background: #1a2a3a; }
+
+.wqm-edit {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 0.35rem;
+  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  color: var(--text-primary);
+  font: inherit;
+  padding: 0.28rem 0.35rem;
+  outline: none;
+}
+
+.wqm-edit:focus {
+  border-color: #446ACB;
+  box-shadow: 0 0 0 2px rgba(68,106,203,0.12);
+  background: var(--input-bg);
+}
+
+.wqm-edit.small {
+  text-align: center;
+  font-weight: 800;
+}
+
+.wqm-edit.station-name {
+  font-weight: 800;
+  margin-bottom: 0.25rem;
+}
+
+.wqm-edit.station-address {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+
+.wqm-edit.value {
+  min-width: 46px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.wqm-edit.avg {
+  color: #446ACB;
+  font-weight: 800;
+}
+
+.wqm-row-action {
+  border: none;
+  border-radius: 0.45rem;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.wqm-row-action.danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+[data-theme='dark'] .wqm-row-action.danger {
+  background: rgba(220,38,38,0.18);
+  color: #fca5a5;
 }
 
 .empty-row {
@@ -372,6 +516,199 @@
   padding: 3rem;
   color: var(--text-secondary);
   font-style: italic;
+}
+
+/* Ant Design table redesign */
+.ant-wqm2026 {
+  padding: 0;
+}
+
+.wqm-ant-tabs {
+  margin-bottom: 1rem;
+}
+
+.wqm-ant-tabs .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.wqm-ant-tabs .ant-tabs-tab {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.wqm-ant-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #446ACB;
+}
+
+.wqm-ant-panel {
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.wqm-ant-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--table-head);
+  flex-wrap: wrap;
+}
+
+.wqm-ant-title-block h2 {
+  color: var(--text-primary);
+  font-size: 1.04rem;
+  margin: 0 0 0.4rem;
+}
+
+.wqm-ant-search {
+  width: 260px;
+}
+
+.wqm-ant-note {
+  margin: 0.8rem 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  padding: 0.62rem 0.75rem;
+  font-size: 0.78rem;
+}
+
+.wqm-ant-table {
+  padding: 1rem;
+}
+
+.wqm-ant-table .ant-table {
+  color: var(--text-primary);
+  background: var(--bg-card);
+  font-size: 0.74rem;
+}
+
+.wqm-ant-table .ant-table-thead > tr > th {
+  background: #253C78;
+  color: #fff;
+  font-size: 0.67rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.wqm-ant-table .ant-table-tbody > tr > td {
+  background: var(--bg-card);
+  border-color: var(--border-subtle);
+}
+
+.wqm-ant-table .ant-table-tbody > tr:nth-child(even) > td {
+  background: var(--row-hover);
+}
+
+.wqm-ant-table .ant-table-tbody > tr:hover > td {
+  background: #EEF0FB !important;
+}
+
+.wqm-ant-table .ant-table-cell-fix-left,
+.wqm-ant-table .ant-table-cell-fix-right {
+  background: inherit;
+}
+
+.wqm-station-editor {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.wqm-station-editor strong {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+}
+
+.wqm-station-editor span {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.wqm-param-text {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.wqm-ant-input.center input,
+.wqm-ant-input.numeric input,
+.wqm-ant-input.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.wqm-ant-input.center {
+  text-align: center;
+}
+
+.wqm-ant-input.avg {
+  color: #446ACB;
+  font-weight: 800;
+}
+
+.wqm-ant-input.station-name {
+  font-weight: 800;
+}
+
+.wqm-ant-input.station-address {
+  color: var(--text-secondary);
+}
+
+.annual-average-column {
+  background: color-mix(in srgb, var(--bg-card) 90%, #446ACB 10%) !important;
+  color: #446ACB;
+  font-weight: 800;
+}
+
+[data-theme='dark'] .wqm-ant-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #93c5fd;
+}
+
+[data-theme='dark'] .wqm-ant-table .ant-table,
+[data-theme='dark'] .wqm-ant-table .ant-table-container,
+[data-theme='dark'] .wqm-ant-table .ant-table-content,
+[data-theme='dark'] .wqm-ant-table .ant-table-body {
+  background: var(--bg-card);
+}
+
+[data-theme='dark'] .wqm-ant-table .ant-table-thead > tr > th {
+  background: #1a3050;
+  color: #dbeafe;
+}
+
+[data-theme='dark'] .wqm-ant-table .ant-table-tbody > tr > td {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .wqm-ant-table .ant-table-tbody > tr:nth-child(even) > td {
+  background: #1a2a3a;
+}
+
+[data-theme='dark'] .wqm-ant-table .ant-table-tbody > tr:hover > td {
+  background: #173229 !important;
+}
+
+[data-theme='dark'] .annual-average-column {
+  background: rgba(68,106,203,0.12) !important;
+  color: #93c5fd;
+}
+
+@media (max-width: 760px) {
+  .wqm-ant-toolbar {
+    align-items: stretch;
+  }
+
+  .wqm-ant-search {
+    width: 100%;
+  }
 }
 
 /* Footer */
@@ -415,4 +752,4 @@
   .wqm-search { width: 160px; }
   .wqm-controls { gap: 0.4rem; }
 }
-
+

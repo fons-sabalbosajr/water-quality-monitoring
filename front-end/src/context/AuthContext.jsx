@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState } from 'react';
 import api from '../api/axios';
 import encryptedStorage from '../utils/encryptedStorage';
@@ -6,7 +7,10 @@ const STORAGE_KEY = 'wqm_user';
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(() => encryptedStorage.getItem(STORAGE_KEY));
+  const [user, setUser] = useState(() => {
+    encryptedStorage.encryptAllExisting();
+    return encryptedStorage.getItem(STORAGE_KEY);
+  });
 
   const login = async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
@@ -17,8 +21,10 @@ export const AuthProvider = ({ children }) => {
 
   const register = async (name, email, password) => {
     const { data } = await api.post('/auth/register', { name, email, password });
-    encryptedStorage.setItem(STORAGE_KEY, data);
-    setUser(data);
+    if (data.token) {
+      encryptedStorage.setItem(STORAGE_KEY, data);
+      setUser(data);
+    }
     return data;
   };
 

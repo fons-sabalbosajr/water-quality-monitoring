@@ -186,6 +186,12 @@
   color: #dc2626;
 }
 
+.alert-success {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  color: #166534;
+}
+
 /* Form */
 .form-group {
   display: flex;

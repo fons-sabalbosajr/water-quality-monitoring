@@ -41,16 +41,30 @@ router.post('/register', async (req, res) => {
 
     const userCount = await User.countDocuments();
     const role = userCount === 0 ? 'admin' : 'user';
-    const user = await User.create({ name, email, password, role });
+    const status = userCount === 0 ? 'approved' : 'pending';
+    const user = await User.create({ name, email, password, role, status });
 
-    // Send welcome email (non-blocking)
-    sendMail(user.email, welcomeTemplate({ name: user.name }));
+    if (status === 'approved') {
+      sendMail(user.email, welcomeTemplate({ name: user.name }));
+    }
+
+    if (status === 'pending') {
+      return res.status(201).json({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+        message: 'Registration submitted. An administrator must approve your account before you can sign in.',
+      });
+    }
 
     res.status(201).json({
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
+      status: user.status,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -74,11 +88,20 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
+    const status = user.status || 'approved';
+    if (status === 'pending') {
+      return res.status(403).json({ message: 'Your account is pending administrator approval.' });
+    }
+    if (status === 'rejected') {
+      return res.status(403).json({ message: 'Your account registration was not approved. Contact an administrator.' });
+    }
+
     res.json({
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
+      status,
       token: generateToken(user._id),
     });
   } catch (error) {

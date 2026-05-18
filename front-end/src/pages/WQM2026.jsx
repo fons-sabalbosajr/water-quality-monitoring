@@ -1,226 +1,395 @@
 import { useMemo, useState } from 'react';
+import { Button, Input, Popconfirm, Space, Table, Tabs, Tag } from 'antd';
+import {
+  DeleteOutlined, DownloadOutlined, PlusOutlined, ReloadOutlined, SearchOutlined,
+} from '@ant-design/icons';
+import 'antd/dist/reset.css';
 import wqmData from '../data/wqm2026.json';
-import { IcoSearch, IcoDownload } from '../components/Icons';
+import { useAuth } from '../context/AuthContext';
+import encryptedStorage from '../utils/encryptedStorage';
+import {
+  MONTHS_SHORT, fmt, getAvailableParams, getParamData, getStations,
+  hasNumericReading, normalizeParamName, toTitle,
+} from '../utils/wqmData';
 import './WQM2026.css';
 
-const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const STORAGE_KEY = 'wqm_2026_drafts';
 
-// Standard parameter display order
-const PARAM_ORDER = [
-  'DO (mg/L)', 'BOD (mg/L)', 'TSS (mg/L)', 'pH',
-  'Temp. (°C)', 'Color (TCU)', 'Fecal Coliform (MPN/100mL)',
-  'NO3-N (mg/L)', 'PO4-P (mg/L)', 'Cl- (mg/L)', 'Oil and Grease',
-];
+const clone = (value) => JSON.parse(JSON.stringify(value));
 
-// Normalize param names from raw data
-const normalizeParam = (p) => {
-  if (/temp/i.test(p)) return 'Temp. (°C)';
-  if (/observ/i.test(p)) return null;
-  return p;
+const buildSheets = (source) => Object.entries(source)
+  .map(([key, val]) => ({
+    key,
+    name: val.name ? toTitle(val.name) : toTitle(key),
+    classInfo: val.classInfo || '',
+    stations: getStations(val),
+  }))
+  .filter((sheet) => sheet.stations.some(hasNumericReading));
+
+const filterSheetsWithReadings = (sheets) => sheets.filter((sheet) => (
+  sheet.stations?.some(hasNumericReading)
+));
+
+const INITIAL_SHEETS = buildSheets(wqmData);
+
+const parseEditableValue = (value) => {
+  const cleaned = String(value ?? '').trim();
+  if (!cleaned || cleaned === '-' || cleaned === '—') return null;
+  if (cleaned === '*') return '*';
+  if (/^</.test(cleaned)) return cleaned;
+  const numeric = Number(cleaned.replace(/,/g, ''));
+  return Number.isFinite(numeric) ? numeric : cleaned;
 };
 
-// Title-case helper
-const toTitle = (str) =>
-  str.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+const normalizeMonthly = (monthly = []) => Array.from({ length: 12 }, (_, index) => monthly[index] ?? null);
 
-// Format numeric value
-const fmt = (v) => {
-  if (v === null || v === undefined || v === '') return '-';
-  if (typeof v === 'number') return v >= 1000 ? v.toFixed(0) : v < 10 ? v.toFixed(2) : v.toFixed(1);
-  return String(v);
+const getParamStorageKey = (station, displayParam) => (
+  Object.keys(station.params || {}).find((key) => normalizeParamName(key) === normalizeParamName(displayParam)) || displayParam
+);
+
+const EditableCell = ({ value, className = '', disabled, onSave, ariaLabel }) => {
+  if (disabled) return <span className={className}>{fmt(value)}</span>;
+  return (
+    <Input
+      size="small"
+      className={`wqm-ant-input ${className}`}
+      defaultValue={value ?? ''}
+      aria-label={ariaLabel}
+      onBlur={(event) => onSave(event.target.value)}
+      onPressEnter={(event) => event.currentTarget.blur()}
+    />
+  );
 };
-
-const SHEETS = Object.entries(wqmData).map(([key, val]) => ({
-  key,
-  name: val.name ? toTitle(val.name) : toTitle(key),
-  classInfo: val.classInfo || '',
-  stations: val.stations || [],
-}));
 
 const WQM2026 = () => {
-  const [activeTab, setActiveTab] = useState(SHEETS[0]?.key || '');
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [sheets, setSheets] = useState(() => filterSheetsWithReadings(encryptedStorage.getItem(STORAGE_KEY) || INITIAL_SHEETS));
+  const [activeTab, setActiveTab] = useState(sheets[0]?.key || '');
   const [search, setSearch] = useState('');
+  const [message, setMessage] = useState('');
 
-  const sheet = SHEETS.find((s) => s.key === activeTab);
+  const sheet = sheets.find((item) => item.key === activeTab) || sheets[0];
 
-  // Compute ordered params for this sheet
-  const params = useMemo(() => {
-    if (!sheet) return [];
-    const raw = [...new Set(
-      sheet.stations.flatMap((s) => Object.keys(s.params)).map(normalizeParam).filter(Boolean)
-    )];
-    const ordered = PARAM_ORDER.filter((p) => raw.includes(p));
-    const extra = raw.filter((p) => !PARAM_ORDER.includes(p));
-    return [...ordered, ...extra];
-  }, [sheet]);
-
-  // Get station param data (handles Temp alias)
-  const getParam = (station, paramKey) => {
-    let p = station.params[paramKey];
-    if (!p && paramKey === 'Temp. (°C)') p = station.params['Temp. (OC)'];
-    return p || null;
+  const updateSheets = (updater, successMessage) => {
+    setSheets((current) => {
+      const next = updater(clone(current));
+      encryptedStorage.setItem(STORAGE_KEY, next);
+      return next;
+    });
+    if (successMessage) setMessage(successMessage);
   };
 
-  // Filter stations
-  const filtered = useMemo(() => {
-    if (!sheet) return [];
-    const q = search.toLowerCase().trim();
-    return sheet.stations.filter(
-      (s) =>
-        !q ||
-        s.stnId.toLowerCase().includes(q) ||
-        s.address.toLowerCase().includes(q) ||
-        String(s.stnNo).includes(q)
-    );
-  }, [sheet, search]);
+  const params = useMemo(() => (sheet ? getAvailableParams(sheet.stations, false) : []), [sheet]);
 
-  // Export CSV — Excel template format (one row per station-parameter)
+  const stationOptions = useMemo(() => (sheet?.stations || []).map((station) => ({
+    text: station.stnId,
+    value: station.stnId,
+  })), [sheet]);
+
+  const paramOptions = useMemo(() => params.map((param) => ({ text: param, value: param })), [params]);
+
+  const tableRows = useMemo(() => {
+    if (!sheet) return [];
+    const query = search.toLowerCase().trim();
+    return sheet.stations
+      .filter((station) => !query || [station.stnId, station.address, station.stnNo]
+        .some((value) => String(value || '').toLowerCase().includes(query)))
+      .flatMap((station) => params.map((param) => {
+        const data = getParamData(station, param);
+        return {
+          key: `${station.stnNo}-${param}`,
+          station,
+          stationNo: station.stnNo,
+          stationId: station.stnId,
+          address: station.address,
+          param,
+          monthly: normalizeMonthly(data?.monthly),
+          avg: data?.avg ?? null,
+        };
+      }));
+  }, [params, search, sheet]);
+
+  const updateStation = (stationNo, updater, successMessage) => {
+    if (!sheet || !isAdmin) return;
+    updateSheets((draft) => draft.map((item) => {
+      if (item.key !== sheet.key) return item;
+      return {
+        ...item,
+        stations: item.stations.map((station) => (
+          station.stnNo === stationNo ? updater(station) : station
+        )),
+      };
+    }), successMessage);
+  };
+
+  const updateReading = (station, param, monthIndex, value) => {
+    updateStation(station.stnNo, (draftStation) => {
+      const paramKey = getParamStorageKey(draftStation, param);
+      const existing = getParamData(draftStation, param) || { monthly: Array(12).fill(null), avg: null };
+      const normalizedMonthly = normalizeMonthly(existing.monthly);
+      normalizedMonthly[monthIndex] = parseEditableValue(value);
+      draftStation.params[paramKey] = { ...existing, monthly: normalizedMonthly };
+      return draftStation;
+    }, 'Monthly reading saved in encrypted local draft.');
+  };
+
+  const updateAverage = (station, param, value) => {
+    updateStation(station.stnNo, (draftStation) => {
+      const paramKey = getParamStorageKey(draftStation, param);
+      const existing = getParamData(draftStation, param) || { monthly: Array(12).fill(null), avg: null };
+      draftStation.params[paramKey] = { ...existing, monthly: normalizeMonthly(existing.monthly), avg: parseEditableValue(value) };
+      return draftStation;
+    }, 'Annual average saved in encrypted local draft.');
+  };
+
+  const updateStationField = (station, field, value) => {
+    updateStation(station.stnNo, (draftStation) => ({
+      ...draftStation,
+      [field]: field === 'stnNo' ? parseEditableValue(value) : String(value || '').trim(),
+    }), 'Station details saved in encrypted local draft.');
+  };
+
+  const addStation = () => {
+    if (!sheet || !isAdmin) return;
+    const numericNos = sheet.stations.map((station) => Number(station.stnNo)).filter(Number.isFinite);
+    const nextNo = (numericNos.length ? Math.max(...numericNos) : 0) + 1;
+    const paramsTemplate = Object.fromEntries(params.map((param) => [param, { monthly: Array(12).fill(null), avg: null }]));
+    updateSheets((draft) => draft.map((item) => (
+      item.key === sheet.key
+        ? {
+          ...item,
+          stations: [
+            ...item.stations,
+            { stnNo: nextNo, stnId: `New Station ${nextNo}`, address: 'Update station address', params: paramsTemplate },
+          ],
+        }
+        : item
+    )), 'New station added to encrypted local draft.');
+  };
+
+  const deleteStation = (station) => {
+    if (!sheet || !isAdmin) return;
+    updateSheets((draft) => draft.map((item) => (
+      item.key === sheet.key
+        ? { ...item, stations: item.stations.filter((entry) => entry.stnNo !== station.stnNo) }
+        : item
+    )), 'Station removed from encrypted local draft.');
+  };
+
+  const resetDrafts = () => {
+    if (!isAdmin) return;
+    encryptedStorage.removeItem(STORAGE_KEY);
+    setSheets(INITIAL_SHEETS);
+    setActiveTab(INITIAL_SHEETS[0]?.key || '');
+    setSearch('');
+    setMessage('Encrypted local draft reset to source dataset.');
+  };
+
   const exportCSV = () => {
     if (!sheet) return;
     const headers = ['Stn. No.', 'Station ID', 'Address', 'Parameter', ...MONTHS_SHORT, 'Annual Avg'];
-    const rows = [];
-    filtered.forEach((s) => {
-      params.forEach((param) => {
-        const p = getParam(s, param);
-        rows.push([
-          s.stnNo, s.stnId, s.address, param,
-          ...(p ? p.monthly.map((v) => (v !== null ? v : '')) : Array(12).fill('')),
-          p ? (p.avg !== null ? p.avg : '') : '',
-        ]);
-      });
-    });
+    const rows = tableRows.map((row) => [
+      row.stationNo, row.stationId, row.address, row.param,
+      ...row.monthly.map((value) => (value !== null ? value : '')),
+      row.avg !== null ? row.avg : '',
+    ]);
     const csv = [headers, ...rows]
-      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
       .join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `WQM2026_${activeTab}.csv`;
-    a.click();
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `WQM2026_${activeTab}.csv`;
+    anchor.click();
     URL.revokeObjectURL(url);
   };
 
+  const columns = [
+    {
+      title: 'No.',
+      dataIndex: 'stationNo',
+      width: 72,
+      fixed: 'left',
+      render: (_, row) => (
+        <EditableCell
+          value={row.stationNo}
+          disabled={!isAdmin}
+          className="center"
+          ariaLabel={`${row.stationId} station number`}
+          onSave={(value) => updateStationField(row.station, 'stnNo', value)}
+        />
+      ),
+    },
+    {
+      title: 'Station / Address',
+      dataIndex: 'stationId',
+      width: 270,
+      fixed: 'left',
+      filters: stationOptions,
+      filterSearch: true,
+      onFilter: (value, row) => row.stationId === value,
+      render: (_, row) => (
+        <div className="wqm-station-editor">
+          {isAdmin ? (
+            <>
+              <Input
+                size="small"
+                className="wqm-ant-input station-name"
+                defaultValue={row.stationId}
+                onBlur={(event) => updateStationField(row.station, 'stnId', event.target.value)}
+                onPressEnter={(event) => event.currentTarget.blur()}
+              />
+              <Input
+                size="small"
+                className="wqm-ant-input station-address"
+                defaultValue={row.address}
+                onBlur={(event) => updateStationField(row.station, 'address', event.target.value)}
+                onPressEnter={(event) => event.currentTarget.blur()}
+              />
+            </>
+          ) : (
+            <>
+              <strong>{row.stationId}</strong>
+              <span>{row.address}</span>
+            </>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Parameter',
+      dataIndex: 'param',
+      width: 190,
+      fixed: 'left',
+      filters: paramOptions,
+      filterSearch: true,
+      onFilter: (value, row) => row.param === value,
+      render: (value) => <span className="wqm-param-text">{value}</span>,
+    },
+    ...MONTHS_SHORT.map((month, monthIndex) => ({
+      title: month,
+      dataIndex: ['monthly', monthIndex],
+      width: 86,
+      align: 'right',
+      render: (_, row) => (
+        <EditableCell
+          value={row.monthly[monthIndex]}
+          disabled={!isAdmin}
+          className="numeric"
+          ariaLabel={`${row.stationId} ${row.param} ${month}`}
+          onSave={(value) => updateReading(row.station, row.param, monthIndex, value)}
+        />
+      ),
+    })),
+    {
+      title: 'Annual Avg',
+      dataIndex: 'avg',
+      width: 112,
+      align: 'right',
+      className: 'annual-average-column',
+      render: (_, row) => (
+        <EditableCell
+          value={row.avg}
+          disabled={!isAdmin}
+          className="numeric avg"
+          ariaLabel={`${row.stationId} ${row.param} annual average`}
+          onSave={(value) => updateAverage(row.station, row.param, value)}
+        />
+      ),
+    },
+  ];
+
+  if (isAdmin) {
+    columns.push({
+      title: 'Actions',
+      key: 'actions',
+      width: 110,
+      fixed: 'right',
+      render: (_, row) => (
+        <Popconfirm
+          title="Delete station draft?"
+          description={`Remove ${row.stationId} from the encrypted local draft.`}
+          okText="Delete"
+          cancelText="Cancel"
+          onConfirm={() => deleteStation(row.station)}
+        >
+          <Button danger size="small" icon={<DeleteOutlined />}>Delete</Button>
+        </Popconfirm>
+      ),
+    });
+  }
+
+  const tabItems = sheets.map((item) => ({ key: item.key, label: item.name }));
   const classLabel = sheet?.classInfo?.match(/CLASS\s+(\S+)/)?.[1] || '';
 
   return (
-    <div className="wqm2026">
-      {/* Page header */}
-      <div className="wqm-page-header">
-        <div>
-          <h2 className="wqm-title">Water Quality Data <span>2026</span></h2>
-          <p className="wqm-subtitle">CY 2026 Summary Report · Environmental Management Bureau Region III</p>
-        </div>
-      </div>
+    <div className="wqm2026 ant-wqm2026">
+      <Tabs
+        className="wqm-ant-tabs"
+        activeKey={sheet?.key}
+        items={tabItems}
+        onChange={(key) => { setActiveTab(key); setSearch(''); }}
+      />
 
-      {/* Waterbody tab bar */}
-      <div className="wb-tabbar-wrapper">
-        <div className="wb-tabbar">
-          {SHEETS.map((s) => (
-            <button
-              key={s.key}
-              className={`wb-tab${activeTab === s.key ? ' active' : ''}`}
-              onClick={() => { setActiveTab(s.key); setSearch(''); }}
-            >
-              {s.name}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Sheet area */}
       {sheet && (
-        <div className="wqm-sheet-area">
-          <div className="wqm-sheet-header">
-            <div className="wqm-sheet-info">
-              <h3 className="wqm-wb-name">{sheet.name}</h3>
-              {classLabel && <span className="class-badge">Class {classLabel}</span>}
-              <span className="stn-count-badge">{sheet.stations.length} stations</span>
+        <section className="wqm-ant-panel">
+          <div className="wqm-ant-toolbar">
+            <div className="wqm-ant-title-block">
+              <h2>{sheet.name}</h2>
+              <Space size={6} wrap>
+                {classLabel && <Tag color="blue">Class {classLabel}</Tag>}
+                <Tag color="green">{sheet.stations.length} stations</Tag>
+                <Tag color="default">{params.length} parameters</Tag>
+                {isAdmin ? <Tag color="gold">Admin CRUD</Tag> : <Tag>Read only</Tag>}
+              </Space>
             </div>
-            <div className="wqm-controls">
-              <div className="wqm-search-wrap">
-                <span className="search-icon"><IcoSearch size={13} /></span>
-                <input
-                  className="wqm-search"
-                  type="search"
-                  placeholder="Filter station…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-              </div>
-              <button className="wqm-btn export-btn" onClick={exportCSV}>
-                <IcoDownload size={13} />
-                Export CSV
-              </button>
+            <Space wrap>
+              <Input
+                allowClear
+                className="wqm-ant-search"
+                prefix={<SearchOutlined />}
+                placeholder="Search station, address, or no."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              <Button icon={<DownloadOutlined />} onClick={exportCSV}>Export CSV</Button>
+              {isAdmin && (
+                <>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={addStation}>Add Station</Button>
+                  <Popconfirm
+                    title="Reset encrypted local draft?"
+                    description="This restores the bundled 2026 source data."
+                    okText="Reset"
+                    cancelText="Cancel"
+                    onConfirm={resetDrafts}
+                  >
+                    <Button icon={<ReloadOutlined />}>Reset Draft</Button>
+                  </Popconfirm>
+                </>
+              )}
+            </Space>
+          </div>
+
+          {(message || !isAdmin) && (
+            <div className="wqm-ant-note">
+              {message || 'Read-only mode. CRUD controls are restricted to administrators.'}
             </div>
-          </div>
+          )}
 
-          {/* ── Excel-template table ── */}
-          <div className="wqm-table-wrap">
-            <table className="wqm-table">
-              <thead>
-                <tr className="wqm-thead-row">
-                  <th className="col-stnno th-s0">No.</th>
-                  <th className="col-stninfo th-s1">Station / Address</th>
-                  <th className="col-param th-s2">Parameter</th>
-                  {MONTHS_SHORT.map((m) => (
-                    <th key={m} className="col-month">{m}</th>
-                  ))}
-                  <th className="col-avg">Ann. Avg</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={16} className="empty-row">No stations match your filter.</td>
-                  </tr>
-                ) : (
-                  filtered.flatMap((station, sIdx) =>
-                    params.map((param, pIdx) => {
-                      const p = getParam(station, param);
-                      const isFirst = pIdx === 0;
-                      const isLast = pIdx === params.length - 1;
-                      const grp = sIdx % 2 === 0 ? 'grp-even' : 'grp-odd';
-                      const rowCls = ['prow', grp, isLast ? 'grp-last' : ''].filter(Boolean).join(' ');
-
-                      return (
-                        <tr key={`${station.stnNo}-${param}`} className={rowCls}>
-                          {isFirst && (
-                            <>
-                              <td rowSpan={params.length} className="td-stnno td-s0">
-                                {station.stnNo}
-                              </td>
-                              <td rowSpan={params.length} className="td-stninfo td-s1">
-                                <span className="stn-id-txt">{station.stnId}</span>
-                                <span className="stn-addr-txt">{station.address}</span>
-                              </td>
-                            </>
-                          )}
-                          <td className="td-param td-s2">{param}</td>
-                          {MONTHS_SHORT.map((_, mIdx) => {
-                            const v = p ? p.monthly[mIdx] : null;
-                            return (
-                              <td key={mIdx} className={`td-mv${v === null ? ' td-null' : ''}`}>
-                                {fmt(v)}
-                              </td>
-                            );
-                          })}
-                          <td className="td-avg">{fmt(p ? p.avg : null)}</td>
-                        </tr>
-                      );
-                    })
-                  )
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="wqm-table-footer">
-            <span>
-              {filtered.length} station{filtered.length !== 1 ? 's' : ''} &middot; {params.length} parameters &middot; CY 2026
-            </span>
-          </div>
-        </div>
+          <Table
+            className="wqm-ant-table"
+            size="small"
+            bordered
+            sticky
+            rowKey="key"
+            columns={columns}
+            dataSource={tableRows}
+            scroll={{ x: 1680, y: 'calc(100vh - 360px)' }}
+            pagination={{ pageSize: 80, showSizeChanger: true, pageSizeOptions: [40, 80, 120, 200] }}
+          />
+        </section>
       )}
     </div>
   );

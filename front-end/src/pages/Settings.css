@@ -109,6 +109,74 @@
   padding: 1.5rem;
 }
 
+.approval-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.approval-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.approval-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-base);
+  padding: 0.9rem 1rem;
+}
+
+.approval-card strong,
+.approval-card span,
+.approval-card small {
+  display: block;
+}
+
+.approval-card strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.approval-card span,
+.approval-card small {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  margin-top: 0.16rem;
+}
+
+.approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.approval-state-card {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-base);
+  padding: 1rem;
+}
+
+.approval-state-card strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  margin-bottom: 0.35rem;
+}
+
+.approval-state-card p {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
 .settings-section h3 {
   font-size: 1.05rem;
   font-weight: 700;
@@ -210,7 +278,8 @@
   font-weight: 700;
 }
 
-.role-sel {
+.role-sel,
+.status-sel {
   padding: 0.3rem 0.6rem;
   border-radius: 0.4rem;
   border: 1.5px solid var(--border);
@@ -223,6 +292,12 @@
 
 .role-sel.admin { border-color: #446ACB; color: #253C78; background: #EEF0FB; }
 [data-theme='dark'] .role-sel.admin { background: #1a3050; color: #93c5fd; border-color: #446ACB; }
+.status-sel.approved { border-color: #7CB675; color: #355232; background: #DDF8DA; }
+.status-sel.pending { border-color: #f59e0b; color: #92400e; background: #fffbeb; }
+.status-sel.rejected { border-color: #fca5a5; color: #b91c1c; background: #fef2f2; }
+[data-theme='dark'] .status-sel.approved { background: rgba(124,182,117,0.18); color: #86efac; }
+[data-theme='dark'] .status-sel.pending { background: rgba(245,158,11,0.16); color: #fbbf24; }
+[data-theme='dark'] .status-sel.rejected { background: rgba(220,38,38,0.18); color: #fca5a5; }
 
 .del-btn {
   padding: 0.3rem 0.7rem;
@@ -321,6 +396,18 @@
 .settings-btn.primary {
   background: linear-gradient(135deg, #253C78, #446ACB);
   color: #fff;
+}
+
+.settings-btn.danger {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+}
+
+[data-theme='dark'] .settings-btn.danger {
+  background: rgba(220,38,38,0.18);
+  color: #fca5a5;
+  border-color: #991b1b;
 }
 .email-status { font-size: 0.85rem; color: var(--text-secondary); }
 

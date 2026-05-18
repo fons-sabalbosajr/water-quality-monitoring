@@ -12,7 +12,8 @@ router.use(protect, adminProtect);
 // @route GET /api/admin/users
 router.get('/users', async (req, res) => {
   try {
-    const users = await User.find({}).select('-password').sort({ createdAt: -1 });
+    const filter = req.query.status ? { status: req.query.status } : {};
+    const users = await User.find(filter).select('-password').sort({ createdAt: -1 });
     res.json(users);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -29,6 +30,28 @@ router.patch('/users/:id/role', async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { role },
+      { new: true, select: '-password' }
+    );
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// @route PATCH /api/admin/users/:id/status
+router.patch('/users/:id/status', async (req, res) => {
+  const { status } = req.body;
+  if (!['pending', 'approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ message: 'Status must be pending, approved, or rejected' });
+  }
+  if (req.params.id === req.user._id.toString() && status !== 'approved') {
+    return res.status(400).json({ message: 'Cannot suspend your own administrator account.' });
+  }
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { status },
       { new: true, select: '-password' }
     );
     if (!user) return res.status(404).json({ message: 'User not found' });
