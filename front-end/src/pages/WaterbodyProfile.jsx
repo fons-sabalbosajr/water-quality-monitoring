@@ -3,47 +3,56 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import wqmData from '../data/wqm2026.json';
 import {
-  GAUGE_PARAMS, OBSERVATION_PARAM, PARAM_LIMITS, TREND_LABELS, fmt, fmtWithUnit, getAvailableParams,
+  MONTHS_SHORT, OBSERVATION_PARAM, PARAM_LIMITS, fmt, fmtWithUnit, getAvailableParams,
   getAverageNumber, getGaugePercent, getLatestNumber, getObservationEntries,
-  getParamData, getParamStatus, getParamUnit, getStations, getTrendNumber, toTitle,
+  getMonthlyNumber, getParamData, getParamStatus, getParamUnit, toTitle,
 } from '../utils/wqmData';
+import { getReadableStations, useWqmSheets } from '../utils/wqmSheets';
 import './WaterbodyProfile.css';
 
 const STN_COLORS = ['#446ACB','#7CB675','#e07b54','#a78bfa','#f59e0b','#06b6d4','#ec4899','#84cc16'];
 
-const WaterbodyProfile = ({ waterbodyKey }) => {
-  const sheetData = wqmData[waterbodyKey];
-  const stations = useMemo(() => getStations(sheetData), [sheetData]);
-  const waterbodyName = sheetData?.name ? toTitle(sheetData.name) : toTitle(waterbodyKey);
+const WaterbodyProfile = ({ waterbodyKey, year = 2026, sheets: providedSheets = null }) => {
+  const localSheets = useWqmSheets();
+  const sheets = providedSheets || localSheets;
+  const sheetData = sheets.find((sheet) => sheet.key === waterbodyKey);
+  const stations = useMemo(() => getReadableStations(sheetData), [sheetData]);
+  const waterbodyName = sheetData?.name ? sheetData.name : toTitle(waterbodyKey);
   const classLabel = sheetData?.classInfo?.match(/CLASS\s+(\S+)/)?.[1] || '';
 
   const availableParams = useMemo(() => {
-    return getAvailableParams(stations, true);
+    return getAvailableParams(stations, true).filter((param) => (
+      param === OBSERVATION_PARAM
+        ? getObservationEntries(stations).length > 0
+        : stations.some((station) => getLatestNumber(getParamData(station, param)) !== null
+          || MONTHS_SHORT.some((_, index) => getMonthlyNumber(getParamData(station, param), index) !== null))
+    ));
   }, [stations]);
 
   const [selectedParam, setSelectedParam] = useState('DO (mg/L)');
   const [paramMenuOpen, setParamMenuOpen] = useState(false);
   const activeParam = availableParams.includes(selectedParam) ? selectedParam : (availableParams[0] || 'DO (mg/L)');
   const activeUnit = getParamUnit(activeParam);
+  const isObservationMode = activeParam === OBSERVATION_PARAM;
 
-  const stationSeries = useMemo(() => stations.map((station, index) => ({
+  const stationSeries = useMemo(() => stations
+    .filter((station) => isObservationMode || getLatestNumber(getParamData(station, activeParam)) !== null
+      || MONTHS_SHORT.some((_, index) => getMonthlyNumber(getParamData(station, activeParam), index) !== null))
+    .map((station, index) => ({
     station,
     chartKey: `station_${index}`,
     color: STN_COLORS[index % STN_COLORS.length],
-  })), [stations]);
+  })), [activeParam, isObservationMode, stations]);
 
-  const isObservationMode = activeParam === OBSERVATION_PARAM;
   const observationEntries = useMemo(() => getObservationEntries(stations), [stations]);
   const numericParams = useMemo(
     () => availableParams.filter((param) => param !== OBSERVATION_PARAM),
     [availableParams]
   );
-  const gaugeParams = useMemo(
-    () => GAUGE_PARAMS.filter((param) => availableParams.includes(param)),
-    [availableParams]
-  );
+  const gaugeParams = useMemo(() => (
+    numericParams.filter((param) => stations.some((station) => getLatestNumber(getParamData(station, param)) !== null))
+  ), [numericParams, stations]);
   const stationGaugeData = useMemo(() => stations.map((station) => ({
     station,
     metrics: gaugeParams.map((param) => {
@@ -62,13 +71,13 @@ const WaterbodyProfile = ({ waterbodyKey }) => {
   const chartData = useMemo(() => {
     if (isObservationMode) return [];
 
-    return TREND_LABELS.map((label, monthIndex) => {
+    return MONTHS_SHORT.map((label, monthIndex) => {
       const point = { label };
       stationSeries.forEach(({ station, chartKey }) => {
-        point[chartKey] = getTrendNumber(getParamData(station, activeParam), monthIndex);
+        point[chartKey] = getMonthlyNumber(getParamData(station, activeParam), monthIndex);
       });
       return point;
-    });
+    }).filter((point) => stationSeries.some(({ chartKey }) => point[chartKey] !== null && point[chartKey] !== undefined));
   }, [activeParam, isObservationMode, stationSeries]);
 
   const lastTrendIndexByKey = useMemo(() => stationSeries.reduce((lookup, { chartKey }) => {
@@ -92,7 +101,7 @@ const WaterbodyProfile = ({ waterbodyKey }) => {
           <div className="wb-profile-meta">
             {classLabel && <span className="wb-class-badge">Class {classLabel}</span>}
             <span className="wb-stn-badge">{stations.length} monitoring stations</span>
-            <span className="wb-year-badge">CY 2026</span>
+            <span className="wb-year-badge">CY {year}</span>
           </div>
           {sheetData.classInfo && (
             <p className="wb-class-info-text">{sheetData.classInfo}</p>
@@ -116,7 +125,7 @@ const WaterbodyProfile = ({ waterbodyKey }) => {
         <div className="wb-chart-header">
           <div>
             <h3 className="wb-chart-title">Monthly Trend</h3>
-            <p className="wb-chart-sub">Monthly readings per monitoring station{activeUnit ? ` · ${activeUnit}` : ''} &middot; CY 2026</p>
+            <p className="wb-chart-sub">Monthly readings per monitoring station{activeUnit ? ` · ${activeUnit}` : ''} &middot; CY {year}</p>
           </div>
           <div className="wb-param-dropdown">
             <button
@@ -223,7 +232,7 @@ const WaterbodyProfile = ({ waterbodyKey }) => {
       <div className="wb-gauge-section">
         <div className="wb-gauge-header">
           <h3 className="wb-summary-title">Station Parameter Gauge Metrics</h3>
-          <p className="wb-summary-sub">Latest DO, TSS, pH, temperature, nitrate, and phosphate readings per station</p>
+          <p className="wb-summary-sub">Latest available parameter readings per station</p>
         </div>
         <div className="wb-gauge-table-wrap">
           <table className="wb-gauge-table">

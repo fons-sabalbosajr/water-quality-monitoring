@@ -1,36 +1,33 @@
-import { useMemo, useState } from 'react';
-import { Button, Input, Popconfirm, Space, Table, Tabs, Tag } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { Button, Input, Layout, Modal, Popconfirm, Space, Table, Tag } from 'antd';
 import {
-  DeleteOutlined, DownloadOutlined, PlusOutlined, ReloadOutlined, SearchOutlined,
+  DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, PlusOutlined,
+  ReloadOutlined, SearchOutlined,
 } from '@ant-design/icons';
 import 'antd/dist/reset.css';
-import wqmData from '../data/wqm2026.json';
 import { useAuth } from '../context/AuthContext';
-import encryptedStorage from '../utils/encryptedStorage';
+import api from '../api/axios';
+import { logActivity } from '../utils/appLog';
 import {
-  MONTHS_SHORT, fmt, getAvailableParams, getParamData, getStations,
-  hasNumericReading, normalizeParamName, toTitle,
+  MONTHS_SHORT, fmt, getAvailableParams, getParamData,
+  getParamUnit, normalizeParamName, OBSERVATION_PARAM, toNumber,
 } from '../utils/wqmData';
+import {
+  INITIAL_SHEETS, getStoredWqmSheets, resetStoredWqmSheets,
+  saveStoredWqmSheets,
+} from '../utils/wqmSheets';
 import './WQM2026.css';
 
-const STORAGE_KEY = 'wqm_2026_drafts';
+const { Sider, Content } = Layout;
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const normalizeMonthly = (monthly = []) => Array.from({ length: 12 }, (_, index) => monthly[index] ?? null);
 
-const buildSheets = (source) => Object.entries(source)
-  .map(([key, val]) => ({
-    key,
-    name: val.name ? toTitle(val.name) : toTitle(key),
-    classInfo: val.classInfo || '',
-    stations: getStations(val),
-  }))
-  .filter((sheet) => sheet.stations.some(hasNumericReading));
-
-const filterSheetsWithReadings = (sheets) => sheets.filter((sheet) => (
-  sheet.stations?.some(hasNumericReading)
-));
-
-const INITIAL_SHEETS = buildSheets(wqmData);
+const computeAnnualAverage = (monthly = []) => {
+  const values = normalizeMonthly(monthly).map(toNumber).filter((value) => value !== null);
+  if (!values.length) return null;
+  return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(4));
+};
 
 const parseEditableValue = (value) => {
   const cleaned = String(value ?? '').trim();
@@ -41,159 +38,237 @@ const parseEditableValue = (value) => {
   return Number.isFinite(numeric) ? numeric : cleaned;
 };
 
-const normalizeMonthly = (monthly = []) => Array.from({ length: 12 }, (_, index) => monthly[index] ?? null);
+const getDisplayParamName = (param) => (normalizeParamName(param) === OBSERVATION_PARAM ? 'Observations' : param);
 
 const getParamStorageKey = (station, displayParam) => (
   Object.keys(station.params || {}).find((key) => normalizeParamName(key) === normalizeParamName(displayParam)) || displayParam
 );
 
-const EditableCell = ({ value, className = '', disabled, onSave, ariaLabel }) => {
-  if (disabled) return <span className={className}>{fmt(value)}</span>;
-  return (
-    <Input
-      size="small"
-      className={`wqm-ant-input ${className}`}
-      defaultValue={value ?? ''}
-      aria-label={ariaLabel}
-      onBlur={(event) => onSave(event.target.value)}
-      onPressEnter={(event) => event.currentTarget.blur()}
-    />
-  );
-};
+const buildStationDraft = (station, params) => ({
+  stnNo: station?.stnNo ?? '',
+  stnId: station?.stnId ?? '',
+  address: station?.address ?? '',
+  params: Object.fromEntries(params.map((param) => {
+    const data = station ? getParamData(station, param) : null;
+    return [param, {
+      monthly: normalizeMonthly(data?.monthly).map((value) => value ?? ''),
+      avg: computeAnnualAverage(data?.monthly) ?? data?.avg ?? '',
+    }];
+  })),
+});
 
-const WQM2026 = () => {
+const WQM2026 = ({ year = 2026 }) => {
   const { user } = useAuth();
-  const isAdmin = user?.role === 'admin';
-  const [sheets, setSheets] = useState(() => filterSheetsWithReadings(encryptedStorage.getItem(STORAGE_KEY) || INITIAL_SHEETS));
-  const [activeTab, setActiveTab] = useState(sheets[0]?.key || '');
+  const canManageData = ['admin', 'developer'].includes(user?.role);
+  const [sheets, setSheets] = useState(() => (year === 2026 ? getStoredWqmSheets() : []));
+  const [loading, setLoading] = useState(year !== 2026);
+  const [activeTab, setActiveTab] = useState('');
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
+  const [modalMode, setModalMode] = useState(null);
+  const [editingStation, setEditingStation] = useState(null);
+  const [stationDraft, setStationDraft] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setSearch('');
+        setMessage('');
+      }
+    });
+
+    if (year === 2026) {
+      const localSheets = getStoredWqmSheets();
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setSheets(localSheets);
+          setActiveTab(localSheets[0]?.key || '');
+        }
+      });
+      return undefined;
+    }
+
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setLoading(true);
+        setSheets([]);
+        setActiveTab('');
+      }
+    });
+    api.get(`/water/wqm/${year}`)
+      .then((response) => {
+        if (cancelled) return;
+        const loadedSheets = response.data?.sheets || [];
+        setSheets(loadedSheets);
+        setActiveTab(loadedSheets[0]?.key || '');
+        setMessage(`WQM ${year} loaded from MongoDB.`);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setMessage(error.response?.data?.message || `Unable to load WQM ${year} from MongoDB.`);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [year]);
 
   const sheet = sheets.find((item) => item.key === activeTab) || sheets[0];
-
-  const updateSheets = (updater, successMessage) => {
-    setSheets((current) => {
-      const next = updater(clone(current));
-      encryptedStorage.setItem(STORAGE_KEY, next);
-      return next;
-    });
-    if (successMessage) setMessage(successMessage);
-  };
-
   const params = useMemo(() => (sheet ? getAvailableParams(sheet.stations, false) : []), [sheet]);
+  const modalParams = useMemo(() => (sheet ? getAvailableParams(sheet.stations, true) : []), [sheet]);
+  const periodLabels = sheet?.periodLabels?.length ? sheet.periodLabels : MONTHS_SHORT;
+  const isEditableYear = year === 2026;
+  const isReadOnlyModal = modalMode === 'view' || !canManageData || !isEditableYear;
 
-  const stationOptions = useMemo(() => (sheet?.stations || []).map((station) => ({
-    text: station.stnId,
-    value: station.stnId,
-  })), [sheet]);
-
-  const paramOptions = useMemo(() => params.map((param) => ({ text: param, value: param })), [params]);
-
-  const tableRows = useMemo(() => {
+  const stationRows = useMemo(() => {
     if (!sheet) return [];
     const query = search.toLowerCase().trim();
     return sheet.stations
       .filter((station) => !query || [station.stnId, station.address, station.stnNo]
         .some((value) => String(value || '').toLowerCase().includes(query)))
-      .flatMap((station) => params.map((param) => {
-        const data = getParamData(station, param);
+      .map((station) => {
+        const available = params.filter((param) => getParamData(station, param));
+        const latestValues = available
+          .map((param) => {
+            const data = getParamData(station, param);
+            const monthly = normalizeMonthly(data?.monthly);
+            const latest = [...monthly].reverse().find((value) => value !== null && value !== undefined && value !== '');
+            return latest !== undefined ? `${param}: ${fmt(latest)}` : null;
+          })
+          .filter(Boolean)
+          .slice(0, 3);
+
         return {
-          key: `${station.stnNo}-${param}`,
+          key: station.stnNo,
           station,
-          stationNo: station.stnNo,
-          stationId: station.stnId,
+          stnNo: station.stnNo,
+          stnId: station.stnId,
           address: station.address,
-          param,
-          monthly: normalizeMonthly(data?.monthly),
-          avg: data?.avg ?? null,
+          parameterCount: available.length,
+          latestValues,
         };
-      }));
+      });
   }, [params, search, sheet]);
 
-  const updateStation = (stationNo, updater, successMessage) => {
-    if (!sheet || !isAdmin) return;
+  const updateSheets = (updater, successMessage, logDetails) => {
+    setSheets((current) => {
+      const next = updater(clone(current));
+      saveStoredWqmSheets(next);
+      return next;
+    });
+    if (successMessage) setMessage(successMessage);
+    if (logDetails) logActivity(logDetails.action, logDetails.details, user);
+  };
+
+  const openStationModal = (mode, station = null) => {
+    setModalMode(mode);
+    setEditingStation(station);
+    setStationDraft(buildStationDraft(station, modalParams));
+  };
+
+  const closeModal = () => {
+    setModalMode(null);
+    setEditingStation(null);
+    setStationDraft(null);
+  };
+
+  const setDraftField = (field, value) => {
+    setStationDraft((draft) => ({ ...draft, [field]: value }));
+  };
+
+  const setDraftParam = (param, field, value, monthIndex = null) => {
+    setStationDraft((draft) => {
+      const next = clone(draft);
+      if (field === 'monthly') next.params[param].monthly[monthIndex] = value;
+      next.params[param].avg = computeAnnualAverage(next.params[param].monthly) ?? '';
+      return next;
+    });
+  };
+
+  const saveStation = () => {
+    if (!sheet || !stationDraft || !canManageData || year !== 2026) return;
+    const normalizedStation = {
+      stnNo: parseEditableValue(stationDraft.stnNo),
+      stnId: String(stationDraft.stnId || '').trim(),
+      address: String(stationDraft.address || '').trim(),
+      params: Object.fromEntries(modalParams.map((param) => {
+        const paramKey = editingStation ? getParamStorageKey(editingStation, param) : param;
+        const draftParam = stationDraft.params[param] || { monthly: [], avg: '' };
+        return [paramKey, {
+          monthly: normalizeMonthly(draftParam.monthly).map(parseEditableValue),
+          avg: normalizeParamName(param) === OBSERVATION_PARAM ? null : computeAnnualAverage(draftParam.monthly),
+        }];
+      })),
+    };
+
     updateSheets((draft) => draft.map((item) => {
       if (item.key !== sheet.key) return item;
+      const exists = editingStation && item.stations.some((station) => station.stnNo === editingStation.stnNo);
       return {
         ...item,
-        stations: item.stations.map((station) => (
-          station.stnNo === stationNo ? updater(station) : station
-        )),
+        stations: exists
+          ? item.stations.map((station) => (station.stnNo === editingStation.stnNo ? normalizedStation : station))
+          : [...item.stations, normalizedStation],
       };
-    }), successMessage);
-  };
-
-  const updateReading = (station, param, monthIndex, value) => {
-    updateStation(station.stnNo, (draftStation) => {
-      const paramKey = getParamStorageKey(draftStation, param);
-      const existing = getParamData(draftStation, param) || { monthly: Array(12).fill(null), avg: null };
-      const normalizedMonthly = normalizeMonthly(existing.monthly);
-      normalizedMonthly[monthIndex] = parseEditableValue(value);
-      draftStation.params[paramKey] = { ...existing, monthly: normalizedMonthly };
-      return draftStation;
-    }, 'Monthly reading saved in encrypted local draft.');
-  };
-
-  const updateAverage = (station, param, value) => {
-    updateStation(station.stnNo, (draftStation) => {
-      const paramKey = getParamStorageKey(draftStation, param);
-      const existing = getParamData(draftStation, param) || { monthly: Array(12).fill(null), avg: null };
-      draftStation.params[paramKey] = { ...existing, monthly: normalizeMonthly(existing.monthly), avg: parseEditableValue(value) };
-      return draftStation;
-    }, 'Annual average saved in encrypted local draft.');
-  };
-
-  const updateStationField = (station, field, value) => {
-    updateStation(station.stnNo, (draftStation) => ({
-      ...draftStation,
-      [field]: field === 'stnNo' ? parseEditableValue(value) : String(value || '').trim(),
-    }), 'Station details saved in encrypted local draft.');
+    }), editingStation ? 'Station record updated.' : 'Station record added.', {
+      action: editingStation ? 'Updated station record' : 'Added station record',
+      details: { waterbody: sheet.name, station: normalizedStation.stnId },
+    });
+    closeModal();
   };
 
   const addStation = () => {
-    if (!sheet || !isAdmin) return;
+    if (!sheet || !canManageData || year !== 2026) return;
     const numericNos = sheet.stations.map((station) => Number(station.stnNo)).filter(Number.isFinite);
     const nextNo = (numericNos.length ? Math.max(...numericNos) : 0) + 1;
-    const paramsTemplate = Object.fromEntries(params.map((param) => [param, { monthly: Array(12).fill(null), avg: null }]));
-    updateSheets((draft) => draft.map((item) => (
-      item.key === sheet.key
-        ? {
-          ...item,
-          stations: [
-            ...item.stations,
-            { stnNo: nextNo, stnId: `New Station ${nextNo}`, address: 'Update station address', params: paramsTemplate },
-          ],
-        }
-        : item
-    )), 'New station added to encrypted local draft.');
+    openStationModal('add', {
+      stnNo: nextNo,
+      stnId: `New Station ${nextNo}`,
+      address: '',
+      params: Object.fromEntries(modalParams.map((param) => [param, { monthly: Array(12).fill(null), avg: null }])),
+    });
   };
 
   const deleteStation = (station) => {
-    if (!sheet || !isAdmin) return;
+    if (!sheet || !canManageData || year !== 2026) return;
     updateSheets((draft) => draft.map((item) => (
       item.key === sheet.key
         ? { ...item, stations: item.stations.filter((entry) => entry.stnNo !== station.stnNo) }
         : item
-    )), 'Station removed from encrypted local draft.');
+    )), 'Station removed from encrypted local draft.', {
+      action: 'Deleted station record',
+      details: { waterbody: sheet.name, station: station.stnId },
+    });
   };
 
   const resetDrafts = () => {
-    if (!isAdmin) return;
-    encryptedStorage.removeItem(STORAGE_KEY);
+    if (!canManageData || year !== 2026) return;
+    resetStoredWqmSheets();
     setSheets(INITIAL_SHEETS);
     setActiveTab(INITIAL_SHEETS[0]?.key || '');
     setSearch('');
     setMessage('Encrypted local draft reset to source dataset.');
+    logActivity('Reset tabular draft data', { scope: 'WQM 2026' }, user);
   };
 
   const exportCSV = () => {
     if (!sheet) return;
-    const headers = ['Stn. No.', 'Station ID', 'Address', 'Parameter', ...MONTHS_SHORT, 'Annual Avg'];
-    const rows = tableRows.map((row) => [
-      row.stationNo, row.stationId, row.address, row.param,
-      ...row.monthly.map((value) => (value !== null ? value : '')),
-      row.avg !== null ? row.avg : '',
-    ]);
+    const headers = ['Stn. No.', 'Station ID', 'Address', 'Parameter', 'Unit', ...MONTHS_SHORT.map((month, index) => periodLabels[index] || month), 'Annual Avg'];
+    const rows = sheet.stations.flatMap((station) => params.map((param) => {
+      const data = getParamData(station, param);
+      return [
+        station.stnNo,
+        station.stnId,
+        station.address,
+        param,
+        getParamUnit(param),
+        ...normalizeMonthly(data?.monthly).map((value) => (value !== null ? value : '')),
+        fmt(computeAnnualAverage(data?.monthly) ?? data?.avg),
+      ];
+    }));
     const csv = [headers, ...rows]
       .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
       .join('\n');
@@ -201,140 +276,176 @@ const WQM2026 = () => {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `WQM2026_${activeTab}.csv`;
+    anchor.download = `WQM${year}_${activeTab}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
+    logActivity('Exported tabular results CSV', { waterbody: sheet.name }, user);
   };
 
   const columns = [
     {
-      title: 'No.',
-      dataIndex: 'stationNo',
-      width: 72,
-      fixed: 'left',
-      render: (_, row) => (
-        <EditableCell
-          value={row.stationNo}
-          disabled={!isAdmin}
-          className="center"
-          ariaLabel={`${row.stationId} station number`}
-          onSave={(value) => updateStationField(row.station, 'stnNo', value)}
-        />
-      ),
+      title: 'Stn. No.',
+      dataIndex: 'stnNo',
+      width: 96,
+      sorter: (a, b) => Number(a.stnNo) - Number(b.stnNo),
     },
     {
-      title: 'Station / Address',
-      dataIndex: 'stationId',
-      width: 270,
-      fixed: 'left',
-      filters: stationOptions,
-      filterSearch: true,
-      onFilter: (value, row) => row.stationId === value,
+      title: 'Station',
+      dataIndex: 'stnId',
+      width: 260,
       render: (_, row) => (
-        <div className="wqm-station-editor">
-          {isAdmin ? (
-            <>
-              <Input
-                size="small"
-                className="wqm-ant-input station-name"
-                defaultValue={row.stationId}
-                onBlur={(event) => updateStationField(row.station, 'stnId', event.target.value)}
-                onPressEnter={(event) => event.currentTarget.blur()}
-              />
-              <Input
-                size="small"
-                className="wqm-ant-input station-address"
-                defaultValue={row.address}
-                onBlur={(event) => updateStationField(row.station, 'address', event.target.value)}
-                onPressEnter={(event) => event.currentTarget.blur()}
-              />
-            </>
-          ) : (
-            <>
-              <strong>{row.stationId}</strong>
-              <span>{row.address}</span>
-            </>
-          )}
+        <div className="wqm-station-summary">
+          <strong>{row.stnId}</strong>
+          <span>{row.address}</span>
         </div>
       ),
     },
     {
-      title: 'Parameter',
-      dataIndex: 'param',
-      width: 190,
-      fixed: 'left',
-      filters: paramOptions,
-      filterSearch: true,
-      onFilter: (value, row) => row.param === value,
-      render: (value) => <span className="wqm-param-text">{value}</span>,
+      title: 'Parameters With Values',
+      dataIndex: 'parameterCount',
+      width: 170,
+      render: (value) => <Tag color="blue">{value} parameters</Tag>,
     },
-    ...MONTHS_SHORT.map((month, monthIndex) => ({
-      title: month,
-      dataIndex: ['monthly', monthIndex],
-      width: 86,
-      align: 'right',
-      render: (_, row) => (
-        <EditableCell
-          value={row.monthly[monthIndex]}
-          disabled={!isAdmin}
-          className="numeric"
-          ariaLabel={`${row.stationId} ${row.param} ${month}`}
-          onSave={(value) => updateReading(row.station, row.param, monthIndex, value)}
-        />
-      ),
-    })),
     {
-      title: 'Annual Avg',
-      dataIndex: 'avg',
-      width: 112,
-      align: 'right',
-      className: 'annual-average-column',
+      title: 'Latest Readings',
+      dataIndex: 'latestValues',
+      render: (values) => (
+        <div className="wqm-latest-list">
+          {values.length ? values.map((value) => <span key={value}>{value}</span>) : <span className="wqm-muted">No readings</span>}
+        </div>
+      ),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      fixed: 'right',
       render: (_, row) => (
-        <EditableCell
-          value={row.avg}
-          disabled={!isAdmin}
-          className="numeric avg"
-          ariaLabel={`${row.stationId} ${row.param} annual average`}
-          onSave={(value) => updateAverage(row.station, row.param, value)}
-        />
+        <Space size={6} wrap>
+          <Button size="small" icon={<EyeOutlined />} title="View station details" aria-label="View station details" onClick={() => openStationModal('view', row.station)} />
+          {canManageData && isEditableYear && (
+            <>
+              <Button size="small" type="primary" icon={<EditOutlined />} title="Edit station" aria-label="Edit station" onClick={() => openStationModal('edit', row.station)} />
+              <Popconfirm
+                title="Delete station draft?"
+                description={`Remove ${row.stnId} from the encrypted local draft.`}
+                okText="Delete"
+                cancelText="Cancel"
+                onConfirm={() => deleteStation(row.station)}
+              >
+                <Button danger size="small" icon={<DeleteOutlined />} title="Delete station" aria-label="Delete station" />
+              </Popconfirm>
+            </>
+          )}
+        </Space>
       ),
     },
   ];
 
-  if (isAdmin) {
-    columns.push({
-      title: 'Actions',
-      key: 'actions',
-      width: 110,
-      fixed: 'right',
-      render: (_, row) => (
-        <Popconfirm
-          title="Delete station draft?"
-          description={`Remove ${row.stationId} from the encrypted local draft.`}
-          okText="Delete"
-          cancelText="Cancel"
-          onConfirm={() => deleteStation(row.station)}
-        >
-          <Button danger size="small" icon={<DeleteOutlined />}>Delete</Button>
-        </Popconfirm>
-      ),
-    });
-  }
-
-  const tabItems = sheets.map((item) => ({ key: item.key, label: item.name }));
   const classLabel = sheet?.classInfo?.match(/CLASS\s+(\S+)/)?.[1] || '';
+  const modalParameterColumns = [
+    {
+      title: 'Parameter',
+      dataIndex: 'param',
+      fixed: 'left',
+      width: 170,
+      render: (param) => (
+        <div className="wqm-param-text">
+          <strong>{getDisplayParamName(param)}</strong>
+        </div>
+      ),
+    },
+    {
+      title: 'Unit',
+      dataIndex: 'param',
+      width: 80,
+      render: (param) => (
+        <span className="parameter-unit-cell">
+          {normalizeParamName(param) === OBSERVATION_PARAM ? 'text' : (getParamUnit(param) || 'index')}
+        </span>
+      ),
+    },
+    ...MONTHS_SHORT.map((month, monthIndex) => ({
+      title: periodLabels[monthIndex] || month,
+      dataIndex: ['monthly', monthIndex],
+      width: 96,
+      render: (_, row) => {
+        const isObservation = normalizeParamName(row.param) === OBSERVATION_PARAM;
+        const value = stationDraft?.params[row.param]?.monthly?.[monthIndex] ?? '';
+        return isObservation ? (
+          <Input.TextArea
+            className="parameter-observation-input"
+            autoSize={{ minRows: 2, maxRows: 5 }}
+            value={value}
+            disabled={isReadOnlyModal}
+            onChange={(event) => setDraftParam(row.param, 'monthly', event.target.value, monthIndex)}
+          />
+        ) : (
+          <Input
+            size="small"
+            value={value}
+            disabled={isReadOnlyModal}
+            onChange={(event) => setDraftParam(row.param, 'monthly', event.target.value, monthIndex)}
+          />
+        );
+      },
+    })),
+    {
+      title: 'Annual Avg',
+      dataIndex: 'avg',
+      width: 96,
+      render: (_, row) => (
+        normalizeParamName(row.param) === OBSERVATION_PARAM
+          ? <span className="wqm-muted">-</span>
+          : <Input size="small" value={stationDraft?.params[row.param]?.avg ?? ''} disabled />
+      ),
+    },
+  ];
+  const modalParameterRows = modalParams.map((param) => ({
+    key: param,
+    param,
+    monthly: stationDraft?.params[param]?.monthly || [],
+    avg: stationDraft?.params[param]?.avg ?? '',
+  }));
 
   return (
     <div className="wqm2026 ant-wqm2026">
-      <Tabs
-        className="wqm-ant-tabs"
-        activeKey={sheet?.key}
-        items={tabItems}
-        onChange={(key) => { setActiveTab(key); setSearch(''); }}
-      />
+      <Layout className="wqm-tabular-shell">
+        <Sider className="wqm-sider" width={230}>
+          <div className="wqm-sider-title">Waterbodies</div>
+          <nav className="wqm-sider-menu" aria-label="Tabular result waterbodies">
+            {sheets.map((item) => (
+              <button
+                type="button"
+                key={item.key}
+                className={item.key === sheet?.key ? 'active' : ''}
+                onClick={() => { setActiveTab(item.key); setSearch(''); }}
+              >
+                <span>{item.name}</span>
+                <small>{item.stations.length} stations</small>
+              </button>
+            ))}
+          </nav>
+        </Sider>
 
-      {sheet && (
-        <section className="wqm-ant-panel">
+        {loading && (
+          <Content className="wqm-ant-panel">
+            <div className="app-loading compact" role="status" aria-live="polite">
+              <span />
+              Loading WQM {year} tabular data...
+            </div>
+          </Content>
+        )}
+
+        {!loading && !sheet && (
+          <Content className="wqm-ant-panel">
+            <div className="wqm-ant-note">
+              {message || `No WQM ${year} tabular data is available.`}
+            </div>
+          </Content>
+        )}
+
+        {!loading && sheet && (
+        <Content className="wqm-ant-panel">
           <div className="wqm-ant-toolbar">
             <div className="wqm-ant-title-block">
               <h2>{sheet.name}</h2>
@@ -342,7 +453,7 @@ const WQM2026 = () => {
                 {classLabel && <Tag color="blue">Class {classLabel}</Tag>}
                 <Tag color="green">{sheet.stations.length} stations</Tag>
                 <Tag color="default">{params.length} parameters</Tag>
-                {isAdmin ? <Tag color="gold">Admin CRUD</Tag> : <Tag>Read only</Tag>}
+                {canManageData && year === 2026 ? <Tag color="gold">{user?.role === 'developer' ? 'Developer CRUD' : 'Admin CRUD'}</Tag> : <Tag>Read only</Tag>}
               </Space>
             </div>
             <Space wrap>
@@ -355,7 +466,7 @@ const WQM2026 = () => {
                 onChange={(event) => setSearch(event.target.value)}
               />
               <Button icon={<DownloadOutlined />} onClick={exportCSV}>Export CSV</Button>
-              {isAdmin && (
+              {canManageData && year === 2026 && (
                 <>
                   <Button type="primary" icon={<PlusOutlined />} onClick={addStation}>Add Station</Button>
                   <Popconfirm
@@ -372,25 +483,65 @@ const WQM2026 = () => {
             </Space>
           </div>
 
-          {(message || !isAdmin) && (
+          {(message || !canManageData) && (
             <div className="wqm-ant-note">
-              {message || 'Read-only mode. CRUD controls are restricted to administrators.'}
+              {message || 'Read-only mode. CRUD controls are restricted to administrators and developers.'}
             </div>
           )}
 
           <Table
-            className="wqm-ant-table"
+            className="wqm-ant-table wqm-stations-table"
             size="small"
-            bordered
-            sticky
             rowKey="key"
             columns={columns}
-            dataSource={tableRows}
-            scroll={{ x: 1680, y: 'calc(100vh - 360px)' }}
-            pagination={{ pageSize: 80, showSizeChanger: true, pageSizeOptions: [40, 80, 120, 200] }}
+            dataSource={stationRows}
+            scroll={{ x: 1040, y: 'calc(100vh - 350px)' }}
+            pagination={{ pageSize: 14, showSizeChanger: true, pageSizeOptions: [10, 14, 25, 50] }}
           />
-        </section>
-      )}
+        </Content>
+        )}
+      </Layout>
+
+      <Modal
+        title={modalMode === 'add' ? 'Add Station' : modalMode === 'edit' ? 'Edit Station' : 'Station Details'}
+        open={Boolean(modalMode)}
+        onCancel={closeModal}
+        width="min(1600px, 96vw)"
+        destroyOnHidden
+        footer={[
+          <Button key="cancel" onClick={closeModal}>{isReadOnlyModal ? 'Close' : 'Cancel'}</Button>,
+          !isReadOnlyModal && <Button key="save" type="primary" onClick={saveStation}>Save Station</Button>,
+        ].filter(Boolean)}
+      >
+        {stationDraft && (
+          <div className="station-modal-body">
+            <div className="station-modal-grid">
+              <label>
+                <span>Station No.</span>
+                <Input value={stationDraft.stnNo} disabled={isReadOnlyModal} onChange={(event) => setDraftField('stnNo', event.target.value)} />
+              </label>
+              <label>
+                <span>Station ID</span>
+                <Input value={stationDraft.stnId} disabled={isReadOnlyModal} onChange={(event) => setDraftField('stnId', event.target.value)} />
+              </label>
+              <label className="station-address-field">
+                <span>Address</span>
+                <Input value={stationDraft.address} disabled={isReadOnlyModal} onChange={(event) => setDraftField('address', event.target.value)} />
+              </label>
+            </div>
+
+            <Table
+              className="parameter-editor-ant-table"
+              size="small"
+              rowKey="key"
+              columns={modalParameterColumns}
+              dataSource={modalParameterRows}
+              pagination={false}
+              scroll={{ x: 1320, y: '58vh' }}
+            />
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

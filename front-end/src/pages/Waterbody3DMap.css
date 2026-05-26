@@ -1,0 +1,164 @@
+.map3d-page {
+  display: grid;
+  gap: 1rem;
+}
+
+.map3d-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: var(--bg-card);
+  padding: 1rem 1.15rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.map3d-header p {
+  color: #446ACB;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin: 0 0 0.2rem;
+  text-transform: uppercase;
+}
+
+.map3d-header h2 {
+  color: var(--text-primary);
+  font-size: 1.45rem;
+  margin: 0;
+}
+
+.map3d-header label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: min(320px, 100%);
+}
+
+.map3d-header label span {
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.map3d-header select {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  padding: 0.45rem 0.6rem;
+}
+
+.map3d-stage {
+  position: relative;
+  min-height: 620px;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  overflow: hidden;
+  background: #07111f;
+  box-shadow: var(--shadow-sm);
+}
+
+.map3d-canvas {
+  width: 100%;
+  height: 620px;
+}
+
+.map3d-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.map3d-panel {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: min(300px, calc(100% - 2rem));
+  max-height: calc(100% - 2rem);
+  overflow: auto;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 0.75rem;
+  background: rgba(15,23,42,0.82);
+  color: #e2e8f0;
+  padding: 0.9rem;
+  backdrop-filter: blur(12px);
+}
+
+.map3d-panel span {
+  display: block;
+  color: #93c5fd;
+  font-size: 0.65rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+}
+
+.map3d-panel strong {
+  display: block;
+  font-size: 1rem;
+  margin-bottom: 0.45rem;
+}
+
+.map3d-panel p {
+  color: #cbd5e1;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  margin: 0 0 0.75rem;
+}
+
+.map3d-panel div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.map3d-panel small {
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  color: #e2e8f0;
+  font-size: 0.64rem;
+  padding: 0.22rem 0.45rem;
+}
+
+.map3d-state {
+  display: grid;
+  min-height: 340px;
+  place-items: center;
+  border: 1px dashed var(--border);
+  border-radius: 0.85rem;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  padding: 1rem;
+  text-align: center;
+}
+
+@media (max-width: 780px) {
+  .map3d-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .map3d-stage {
+    min-height: 520px;
+  }
+
+  .map3d-canvas {
+    height: 520px;
+  }
+
+  .map3d-panel {
+    left: 0.75rem;
+    right: 0.75rem;
+    top: auto;
+    bottom: 0.75rem;
+    width: auto;
+    max-height: 180px;
+  }
+}

@@ -281,20 +281,27 @@
 }
 
 .wb-trend-pulse-ring {
-  opacity: 0.32;
+  opacity: 0.5;
   transform-box: fill-box;
   transform-origin: center;
+  stroke: #fff;
+  stroke-width: 2;
   animation: wbTrendPulse 1.6s ease-out infinite;
 }
 
+[data-theme='dark'] .wb-trend-pulse-ring {
+  stroke: #0f172a;
+  opacity: 0.68;
+}
+
 @keyframes wbTrendPulse {
-  0% { opacity: 0.38; transform: scale(0.7); }
-  70% { opacity: 0; transform: scale(1.9); }
+  0% { opacity: 0.7; transform: scale(0.7); }
+  70% { opacity: 0.12; transform: scale(1.9); }
   100% { opacity: 0; transform: scale(1.9); }
 }
 
 .wb-trend-last-dot {
-  filter: drop-shadow(0 0 5px rgba(68,106,203,0.45));
+  filter: drop-shadow(0 0 6px rgba(68,106,203,0.75));
 }
 
 .wb-gauge-section {
@@ -609,4 +616,47 @@
     grid-template-columns: 1fr;
   }
 
+}
+
+[data-theme='dark'] .wb-param-menu button:hover,
+[data-theme='dark'] .wb-param-menu button.active {
+  background: var(--row-hover);
+  color: var(--accent);
+}
+
+[data-theme='dark'] .wb-observation-icon {
+  background: rgba(147,197,253,0.14);
+  color: var(--accent);
+}
+
+@media (max-width: 520px) {
+  .wb-profile-header,
+  .wb-chart-card,
+  .wb-gauge-section {
+    border-radius: 0.75rem;
+  }
+
+  .wb-profile-meta,
+  .wb-chart-header {
+    align-items: stretch;
+  }
+
+  .wb-param-menu {
+    left: 0;
+    right: auto;
+    width: min(100%, 86vw);
+  }
+
+  .wb-stations-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wb-header-station-pill,
+  .wb-stn-card {
+    width: 100%;
+  }
+
+  .wb-stn-addr {
+    white-space: normal;
+  }
 }

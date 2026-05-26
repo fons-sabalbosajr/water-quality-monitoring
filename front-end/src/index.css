@@ -30,6 +30,14 @@
   --input-bg:    #f8fafc;
   --badge-bg:    #D6DBF6;
   --badge-color: #253C78;
+  --accent:      #446ACB;
+  --accent-strong: #253C78;
+  --success:     #7CB675;
+  --success-soft:#DDF8DA;
+  --danger:      #dc2626;
+  --danger-soft: #fef2f2;
+  --warning:     #f59e0b;
+  --warning-soft:#fffbeb;
 }
 
 [data-theme='dark'] {
@@ -47,6 +55,14 @@
   --input-bg:    #0f172a;
   --badge-bg:    #1a3050;
   --badge-color: #93c5fd;
+  --accent:      #93c5fd;
+  --accent-strong: #446ACB;
+  --success:     #86efac;
+  --success-soft: rgba(124,182,117,0.18);
+  --danger:      #fca5a5;
+  --danger-soft: rgba(220,38,38,0.18);
+  --warning:     #fbbf24;
+  --warning-soft: rgba(245,158,11,0.16);
 }
 
 body {
@@ -60,6 +76,34 @@ body {
   min-height: 100vh;
 }
 
+.app-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  gap: 0.75rem;
+  align-content: center;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.app-loading.compact {
+  min-height: 220px;
+}
+
+.app-loading span {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--border);
+  border-top-color: #446ACB;
+  border-radius: 50%;
+  animation: appLoadingSpin 0.8s linear infinite;
+}
+
+@keyframes appLoadingSpin {
+  to { transform: rotate(360deg); }
+}
+
 a {
   text-decoration: none;
   color: inherit;
@@ -70,3 +114,16 @@ img {
   display: block;
 }
 
+select,
+input,
+textarea,
+button {
+  font: inherit;
+}
+
+[data-theme='dark'] select,
+[data-theme='dark'] option,
+[data-theme='dark'] optgroup {
+  background: var(--input-bg);
+  color: var(--text-primary);
+}

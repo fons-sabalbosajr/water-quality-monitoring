@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { logActivity } from '../utils/appLog';
 import bagongLogo from '../assets/bagongpilipinaslogo.png';
 import embLogo from '../assets/emblogo.svg';
 import './Login.css';
@@ -21,7 +22,8 @@ const Login = () => {
     setError('');
     setLoading(true);
     try {
-      await login(form.email, form.password);
+      const user = await login(form.email, form.password);
+      logActivity('Signed in', { email: form.email }, user);
       navigate('/');
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed. Please try again.');
