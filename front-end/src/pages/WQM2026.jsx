@@ -456,7 +456,7 @@ const WQM2026 = ({ year = 2026 }) => {
                 {canManageData && year === 2026 ? <Tag color="gold">{user?.role === 'developer' ? 'Developer CRUD' : 'Admin CRUD'}</Tag> : <Tag>Read only</Tag>}
               </Space>
             </div>
-            <Space wrap>
+            <Space>
               <Input
                 allowClear
                 className="wqm-ant-search"
@@ -507,6 +507,8 @@ const WQM2026 = ({ year = 2026 }) => {
         open={Boolean(modalMode)}
         onCancel={closeModal}
         width="min(1600px, 96vw)"
+        rootClassName="wqm-station-modal-root"
+        className="wqm-station-modal"
         destroyOnHidden
         footer={[
           <Button key="cancel" onClick={closeModal}>{isReadOnlyModal ? 'Close' : 'Cancel'}</Button>,

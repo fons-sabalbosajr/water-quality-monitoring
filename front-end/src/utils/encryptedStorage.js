@@ -4,6 +4,9 @@ import CryptoJS from 'crypto-js';
 // This prevents simple copy-paste of encrypted values across origins.
 const _key = `wqm_enc_${window.location.origin}_2026`;
 const PREFIX = 'wqm:v2:';
+const KEY_PREFIX = 'wqm:k2:';
+
+const getStorageKey = (key) => `${KEY_PREFIX}${CryptoJS.SHA256(`wqm-key:${window.location.origin}:${key}`).toString()}`;
 
 const encryptValue = (value) => {
   const serialized = JSON.stringify(value);
@@ -27,51 +30,120 @@ const parsePlainValue = (raw) => {
   }
 };
 
-const encryptedStorage = {
-  setItem(key, value) {
-    localStorage.setItem(key, encryptValue(value));
-  },
+const createEncryptedStorage = (storage) => {
+  const cache = new Map();
 
-  getItem(key) {
-    try {
-      const raw = localStorage.getItem(key);
-      if (!raw) return null;
+  return {
+    setItem(key, value) {
+      const storageKey = getStorageKey(key);
+      storage.setItem(storageKey, encryptValue(value));
+      if (storageKey !== key) storage.removeItem(key);
+      cache.set(key, value);
+    },
 
-      const decrypted = decryptValue(raw);
-      if (decrypted !== null) {
-        if (!raw.startsWith(PREFIX)) this.setItem(key, decrypted);
-        return decrypted;
-      }
-
-      const parsed = parsePlainValue(raw);
-      this.setItem(key, parsed);
-      return parsed;
-    } catch {
-      return null;
-    }
-  },
-
-  removeItem(key) {
-    localStorage.removeItem(key);
-  },
-
-  encryptAllExisting() {
-    Object.keys(localStorage).forEach((key) => {
-      const raw = localStorage.getItem(key);
-      if (!raw || raw.startsWith(PREFIX)) return;
+    getItem(key) {
+      if (cache.has(key)) return cache.get(key);
 
       try {
+        const storageKey = getStorageKey(key);
+        const encryptedRaw = storage.getItem(storageKey);
+        const legacyRaw = encryptedRaw ? null : storage.getItem(key);
+        const raw = encryptedRaw || legacyRaw;
+        if (!raw) {
+          cache.delete(key);
+          return null;
+        }
+
         const decrypted = decryptValue(raw);
         if (decrypted !== null) {
-          localStorage.setItem(key, encryptValue(decrypted));
+          if (!raw.startsWith(PREFIX)) this.setItem(key, decrypted);
+          if (legacyRaw) {
+            storage.setItem(storageKey, encryptValue(decrypted));
+            storage.removeItem(key);
+          }
+          cache.set(key, decrypted);
+          return decrypted;
+        }
+
+        const parsed = parsePlainValue(raw);
+        this.setItem(key, parsed);
+        return parsed;
+      } catch {
+        cache.delete(key);
+        return null;
+      }
+    },
+
+    removeItem(key) {
+      storage.removeItem(getStorageKey(key));
+      storage.removeItem(key);
+      cache.delete(key);
+    },
+
+    clear() {
+      storage.clear();
+      cache.clear();
+    },
+
+    clearCache(key = null) {
+      if (key) {
+        cache.delete(key);
+      } else {
+        cache.clear();
+      }
+    },
+
+    encryptAllExisting() {
+      Object.keys(storage).forEach((key) => {
+        if (key.startsWith(KEY_PREFIX)) return;
+
+        const raw = storage.getItem(key);
+        if (!raw) {
+          cache.delete(key);
           return;
         }
-      } catch {
-        // Continue to plaintext migration.
-      }
+        const storageKey = getStorageKey(key);
 
-      localStorage.setItem(key, encryptValue(parsePlainValue(raw)));
-    });
+        try {
+          const decrypted = decryptValue(raw);
+          if (decrypted !== null) {
+            storage.setItem(storageKey, encryptValue(decrypted));
+            storage.removeItem(key);
+            cache.set(key, decrypted);
+            return;
+          }
+        } catch {
+          // Continue to plaintext migration.
+        }
+
+        const parsed = parsePlainValue(raw);
+        storage.setItem(storageKey, encryptValue(parsed));
+        storage.removeItem(key);
+        cache.set(key, parsed);
+      });
+    },
+  };
+};
+
+const localEncryptedStorage = createEncryptedStorage(localStorage);
+const sessionEncryptedStorage = createEncryptedStorage(sessionStorage);
+
+window.addEventListener('storage', (event) => {
+  if (event.storageArea === localStorage) localEncryptedStorage.clearCache();
+  if (event.storageArea === sessionStorage) sessionEncryptedStorage.clearCache();
+});
+
+const encryptedStorage = {
+  ...localEncryptedStorage,
+  local: localEncryptedStorage,
+  session: sessionEncryptedStorage,
+  encryptAllExisting() {
+    localEncryptedStorage.encryptAllExisting();
+    sessionEncryptedStorage.encryptAllExisting();
+  },
+  clearAll() {
+    localEncryptedStorage.clear();
+    sessionEncryptedStorage.clear();
   },
 };
 

@@ -258,24 +258,13 @@
   text-transform: uppercase;
 }
 
-.forecast-controls select {
-  min-height: 36px;
-  border: 1px solid var(--border);
-  border-radius: 0.55rem;
-  background: var(--input-bg);
-  color: var(--text-primary);
-  padding: 0.4rem 0.55rem;
+.forecast-controls .ant-select {
+  width: 100%;
+  min-width: 220px;
 }
 
-.forecast-controls b {
-  border: 1px solid #f59e0b;
-  border-radius: 9999px;
-  background: #fffbeb;
-  color: #92400e;
-  font-size: 0.68rem;
-  font-weight: 800;
-  padding: 0.25rem 0.55rem;
-  white-space: nowrap;
+.forecast-controls .ant-select-selector {
+  border-color: var(--border);
 }
 
 .forecast-card {
@@ -304,19 +293,22 @@
   margin: 0.65rem 0 0.75rem;
 }
 
-.forecast-tech-grid article {
+.forecast-tech-grid .ant-card {
   border: 1px solid var(--border);
   border-radius: 0.65rem;
   background: var(--bg-base);
-  padding: 0.75rem;
   animation: forecastMetricIn 0.45s ease both;
 }
 
-.forecast-tech-grid article:nth-child(2) { animation-delay: 0.06s; }
-.forecast-tech-grid article:nth-child(3) { animation-delay: 0.12s; }
-.forecast-tech-grid article:nth-child(4) { animation-delay: 0.18s; }
+.forecast-tech-grid .ant-card-body {
+  padding: 0.75rem;
+}
 
-.forecast-tech-grid span,
+.forecast-tech-grid .ant-card:nth-child(2) { animation-delay: 0.06s; }
+.forecast-tech-grid .ant-card:nth-child(3) { animation-delay: 0.12s; }
+.forecast-tech-grid .ant-card:nth-child(4) { animation-delay: 0.18s; }
+
+.forecast-tech-grid .ant-statistic-title,
 .forecast-tech-grid small {
   display: block;
   color: var(--text-secondary);
@@ -326,8 +318,7 @@
   text-transform: uppercase;
 }
 
-.forecast-tech-grid strong {
-  display: block;
+.forecast-tech-grid .ant-statistic-content {
   color: var(--text-primary);
   font-size: 1.12rem;
   font-weight: 900;
@@ -338,11 +329,6 @@
 .forecast-tech-grid small {
   text-transform: none;
   opacity: 0.82;
-}
-
-[data-theme='dark'] .forecast-controls b {
-  background: rgba(245,158,11,0.16);
-  color: #fbbf24;
 }
 
 [data-theme='dark'] .viz-header p {
@@ -373,10 +359,17 @@
 
 .forecast-param-card {
   min-width: 0;
-  border: 1px solid var(--border);
   border-radius: 0.75rem;
   background: var(--bg-base);
+}
+
+.forecast-param-card .ant-card-body {
   padding: 0.85rem;
+}
+
+.forecast-load-more {
+  grid-column: 1 / -1;
+  font-weight: 800;
 }
 
 .forecast-param-head {
@@ -396,11 +389,32 @@
   margin: 0;
 }
 
-.forecast-param-head > strong {
+.forecast-param-head .ant-statistic-content {
   color: var(--text-primary);
   font-size: 1rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  font-weight: 900;
+}
+
+[data-theme='dark'] .forecast-card,
+[data-theme='dark'] .forecast-param-card.ant-card,
+[data-theme='dark'] .forecast-tech-grid .ant-card {
+  border-color: var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .forecast-controls .ant-select-selector {
+  border-color: rgba(148,163,184,0.32);
+  background: rgba(15,23,42,0.9);
+}
+
+[data-theme='dark'] .forecast-controls .ant-select-selection-item,
+[data-theme='dark'] .forecast-controls .ant-select-arrow,
+[data-theme='dark'] .forecast-param-head p,
+[data-theme='dark'] .forecast-tech-grid .ant-statistic-title,
+[data-theme='dark'] .forecast-tech-grid .ant-statistic-content,
+[data-theme='dark'] .forecast-param-head .ant-statistic-content {
+  color: var(--text-primary);
 }
 
 @keyframes forecastScan {

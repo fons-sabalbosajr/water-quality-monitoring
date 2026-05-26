@@ -2,7 +2,7 @@ import axios from 'axios';
 import encryptedStorage from '../utils/encryptedStorage';
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? '/water-quality-monitoring/api' : '/api'),
 });
 
 // Attach JWT token automatically

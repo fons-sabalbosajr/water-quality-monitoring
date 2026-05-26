@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import { Button, Card, Select, Space, Statistic, Tag } from 'antd';
+import { LineChartOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Legend,
@@ -16,12 +18,8 @@ import './Visualizations.css';
 const COLORS = ['#446ACB', '#7CB675', '#e07b54', '#a78bfa', '#f59e0b', '#06b6d4', '#ec4899', '#84cc16'];
 const CHART_TICK = { fontSize: 10 };
 const LEGEND_STYLE = { fontSize: '0.68rem' };
-const MAP_TILE_SIZE = 256;
-const MAP_VIEW = { width: 640, height: 330 };
-const MAP_LAYERS = {
-  standard: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-  humanitarian: 'https://tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-};
+const FORECAST_INITIAL_CARD_LIMIT = 3;
+const CesiumStationMap = lazy(() => import('../components/CesiumStationMap'));
 
 const normalizeForMatch = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const WATERBODY_ALIASES = {
@@ -164,80 +162,6 @@ const buildTechnicalForecast = (observed) => {
   };
 };
 
-const projectMapPoint = (lat, lng, zoom) => {
-  const safeLat = Math.max(Math.min(lat, 85.05112878), -85.05112878);
-  const scale = MAP_TILE_SIZE * (2 ** zoom);
-  const sinLat = Math.sin((safeLat * Math.PI) / 180);
-  return {
-    x: ((lng + 180) / 360) * scale,
-    y: (0.5 - (Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI))) * scale,
-  };
-};
-
-const getMapZoom = (bounds) => {
-  const northWest = projectMapPoint(bounds.maxLat, bounds.minLng, 0);
-  const southEast = projectMapPoint(bounds.minLat, bounds.maxLng, 0);
-  const worldWidth = Math.max(Math.abs(southEast.x - northWest.x), 0.0001);
-  const worldHeight = Math.max(Math.abs(southEast.y - northWest.y), 0.0001);
-  const zoomX = Math.floor(Math.log2((MAP_VIEW.width * 0.82) / worldWidth));
-  const zoomY = Math.floor(Math.log2((MAP_VIEW.height * 0.72) / worldHeight));
-  return Math.max(8, Math.min(15, Math.min(zoomX, zoomY)));
-};
-
-const buildTileMap = (locations) => {
-  if (!locations.length) return null;
-  const lats = locations.map((point) => point.lat);
-  const lngs = locations.map((point) => point.lng);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-  const bounds = {
-    minLat: minLat - Math.max((maxLat - minLat) * 0.22, 0.025),
-    maxLat: maxLat + Math.max((maxLat - minLat) * 0.22, 0.025),
-    minLng: minLng - Math.max((maxLng - minLng) * 0.22, 0.025),
-    maxLng: maxLng + Math.max((maxLng - minLng) * 0.22, 0.025),
-  };
-  const zoom = getMapZoom(bounds);
-  const center = projectMapPoint((bounds.minLat + bounds.maxLat) / 2, (bounds.minLng + bounds.maxLng) / 2, zoom);
-  const origin = {
-    x: center.x - (MAP_VIEW.width / 2),
-    y: center.y - (MAP_VIEW.height / 2),
-  };
-  const startX = Math.floor(origin.x / MAP_TILE_SIZE);
-  const endX = Math.floor((origin.x + MAP_VIEW.width) / MAP_TILE_SIZE);
-  const startY = Math.floor(origin.y / MAP_TILE_SIZE);
-  const endY = Math.floor((origin.y + MAP_VIEW.height) / MAP_TILE_SIZE);
-  const maxTile = 2 ** zoom;
-  const tiles = [];
-
-  for (let x = startX; x <= endX; x += 1) {
-    for (let y = startY; y <= endY; y += 1) {
-      if (y >= 0 && y < maxTile) {
-        const wrappedX = ((x % maxTile) + maxTile) % maxTile;
-        tiles.push({
-          key: `${zoom}-${wrappedX}-${y}`,
-          url: MAP_LAYERS.standard.replace('{z}', zoom).replace('{x}', wrappedX).replace('{y}', y),
-          left: (x * MAP_TILE_SIZE) - origin.x,
-          top: (y * MAP_TILE_SIZE) - origin.y,
-        });
-      }
-    }
-  }
-
-  const pins = locations.map((point, index) => {
-    const projected = projectMapPoint(point.lat, point.lng, zoom);
-    return {
-      ...point,
-      color: COLORS[index % COLORS.length],
-      left: projected.x - origin.x,
-      top: projected.y - origin.y,
-    };
-  });
-
-  return { tiles, pins, zoom };
-};
-
 const getValueRange = (values) => {
   const valid = values.filter((value) => Number.isFinite(value));
   if (!valid.length) return null;
@@ -252,7 +176,7 @@ const chartDefinitions = {
   seasonal: 'Quarterly aggregation of available monthly readings to show wet/dry-season shifts across the selected waterbody.',
   radar: 'Normalized station profile from 0 to 100 so parameters with different units can be compared in one shape.',
   scatter: 'Pairwise parameter plots with a regression line to reveal possible relationships between pollutant indicators.',
-  forecast: 'Short horizon projection from the latest available monthly trend. This is a local linear preview until the AI forecasting model is configured.',
+  forecast: 'Short horizon projection from the latest available monthly trend. Charts are computed in-browser for fast station screening.',
 };
 
 const loadLocations = async () => {
@@ -287,6 +211,7 @@ const VisualizationView = ({ type }) => {
   const stations = useMemo(() => getReadableStations(selectedSheet), [selectedSheet]);
   const params = useMemo(() => getAvailableParams(stations, false), [stations]);
   const [forecastStationKey, setForecastStationKey] = useState('');
+  const [forecastExpandedKey, setForecastExpandedKey] = useState('');
   const currentMonthIndex = useMemo(() => getCurrentMonthIndex(stations, params), [params, stations]);
   const periodLabel = selectedSheet?.periodLabels?.[currentMonthIndex] || MONTHS_SHORT[currentMonthIndex];
   const currentMonthLabel = currentMonthIndex >= 0 ? `${periodLabel} ${visualizationYear}` : 'latest available data';
@@ -356,7 +281,6 @@ const VisualizationView = ({ type }) => {
     const fecal = station ? getCurrentParamValue(station, 'Fecal Coliform (MPN/100mL)', currentMonthIndex) : null;
     return { ...location, stationData: station, fecal, risk: normalizeScore('Fecal Coliform (MPN/100mL)', fecal) };
   }).filter((point) => point.stationData && point.fecal !== null);
-  const tileMap = buildTileMap(pollutionMap);
 
   const trophicData = stations.map((station) => ({
     station: station.stnId,
@@ -406,11 +330,20 @@ const VisualizationView = ({ type }) => {
   const activeForecastStation = forecastStations.find((station) => getStationOptionKey(station) === forecastStationKey)
     || forecastStations[0];
   const activeForecastStationKey = getStationOptionKey(activeForecastStation);
+  const forecastScopeKey = `${activeWaterbodyKey}:${activeForecastStationKey}`;
+  const forecastExpanded = forecastExpandedKey === forecastScopeKey;
+  const forecastParamCandidates = useMemo(() => (
+    activeForecastStation
+      ? params.filter((param) => hasMonthlyParamReading(activeForecastStation, param))
+      : []
+  ), [activeForecastStation, params]);
+  const visibleForecastParams = forecastExpanded
+    ? forecastParamCandidates
+    : forecastParamCandidates.slice(0, FORECAST_INITIAL_CARD_LIMIT);
   const forecastCards = useMemo(() => {
     if (!activeForecastStation) return [];
 
-    return params
-      .filter((param) => hasMonthlyParamReading(activeForecastStation, param))
+    return visibleForecastParams
       .map((param) => {
         const observed = MONTHS_SHORT.map((month, index) => ({
           month,
@@ -425,8 +358,9 @@ const VisualizationView = ({ type }) => {
         };
       })
       .filter((card) => card.observed.length);
-  }, [activeForecastStation, params]);
-  const activeForecastLabel = 'Technical local model';
+  }, [activeForecastStation, visibleForecastParams]);
+  const hiddenForecastCount = Math.max(0, forecastParamCandidates.length - forecastCards.length);
+  const activeForecastLabel = 'Fast trend forecast';
 
   const titleMap = {
     heatmap: 'Heatmap Matrix',
@@ -485,8 +419,8 @@ const VisualizationView = ({ type }) => {
         ? `${strongest.name} has ${strongest.count} paired station readings for relationship analysis.`
         : 'No parameter pairs currently have enough values for scatter analysis.';
     })(),
-    forecast: forecastCards.length
-      ? `${activeForecastStation?.stnId || 'Selected station'} has ${forecastCards.length} parameters with monthly readings. Each chart shows observed station values and the next three projected points.`
+    forecast: forecastParamCandidates.length
+      ? `${activeForecastStation?.stnId || 'Selected station'} has ${forecastParamCandidates.length} parameters with monthly readings. The first charts load immediately; expand only when more detail is needed.`
       : 'No monthly station readings are available for a forecast preview.',
   };
 
@@ -563,35 +497,15 @@ const VisualizationView = ({ type }) => {
           </article>
           <article className="viz-card geo-card">
             <h3>Geospatial Pollution Map</h3>
-            {tileMap ? (
-              <div className="pollution-map">
-                {tileMap.tiles.map((tile) => (
-                  <img
-                    key={tile.key}
-                    className="pollution-tile"
-                    src={tile.url}
-                    alt=""
-                    style={{ left: tile.left, top: tile.top }}
-                    loading="lazy"
-                  />
-                ))}
-                {tileMap.pins.map((point) => (
-                  <span
-                    key={`${point.id}-${point.lat}`}
-                    className="pollution-point"
-                    style={{
-                      left: `${point.left}px`,
-                      top: `${point.top}px`,
-                      '--risk': Math.max(point.risk, 8),
-                      '--point-color': point.color,
-                    }}
-                    title={`${point.stationData?.stnId || point.station || point.id}: ${fmt(point.fecal)} MPN/100mL`}
-                  >
-                    <b>{point.stationData?.stnId || point.station || point.id}</b>
-                  </span>
-                ))}
-              </div>
-            ) : <div className="viz-empty">No mapped fecal readings matched this waterbody.</div>}
+            <Suspense fallback={<div className="viz-empty">Loading 3D pollution map...</div>}>
+              <CesiumStationMap
+                className="pollution-cesium-map"
+                locations={pollutionMap}
+                waterbodyName={selected?.name || 'Waterbody'}
+                height={330}
+                emptyMessage="No mapped fecal readings matched this waterbody."
+              />
+            </Suspense>
           </article>
         </section>
       )}
@@ -677,49 +591,51 @@ const VisualizationView = ({ type }) => {
           <div className="forecast-topline">
             <div>
               <h3>Station Parameter Forecasts</h3>
-              <p>Forecasts use the selected station's monthly values, ordinary least squares trend, and RMSE uncertainty band for each available parameter.</p>
+              <p>Forecasts use the selected station's monthly values, ordinary least squares trend, and RMSE uncertainty band. Only the first charts render initially for faster loading.</p>
             </div>
-            <div className="forecast-controls">
+            <Space className="forecast-controls" size="middle" wrap>
               <label>
                 <span>Station</span>
-                <select value={activeForecastStationKey} onChange={(event) => setForecastStationKey(event.target.value)}>
-                  {forecastStations.map((station) => (
-                    <option key={getStationOptionKey(station)} value={getStationOptionKey(station)}>
-                      {station.stnId}
-                    </option>
-                  ))}
-                </select>
+                <Select
+                  value={activeForecastStationKey}
+                  onChange={setForecastStationKey}
+                  options={forecastStations.map((station) => ({
+                    value: getStationOptionKey(station),
+                    label: station.stnId,
+                  }))}
+                  showSearch
+                  optionFilterProp="label"
+                  popupClassName="wqm-map-select-popup"
+                  getPopupContainer={(trigger) => trigger.parentElement}
+                />
               </label>
-              <b>{activeForecastLabel}</b>
-            </div>
+              <Tag icon={<LineChartOutlined />} color="gold">{activeForecastLabel}</Tag>
+            </Space>
           </div>
-          {forecastCards.length ? (
+          {forecastParamCandidates.length ? (
             <div className="forecast-param-grid">
               {forecastCards.map((card) => (
-                <article key={card.param} className="forecast-param-card">
+                <Card key={card.param} className="forecast-param-card" size="small">
                   <div className="forecast-param-head">
                     <div>
                       <h4>{card.param}</h4>
-                      <p>{activeForecastStation?.stnId} · {card.observed.length} monthly values</p>
+                      <p>{activeForecastStation?.stnId} - {card.observed.length} monthly values</p>
                     </div>
-                    <strong>{fmt(card.diagnostics.latest)}</strong>
+                    <Statistic value={fmt(card.diagnostics.latest)} />
                   </div>
                   <div className="forecast-tech-grid compact">
-                    <article>
-                      <span>Slope</span>
-                      <strong>{fmt(card.diagnostics.slope)}</strong>
+                    <Card size="small">
+                      <Statistic title="Slope" value={fmt(card.diagnostics.slope)} />
                       <small>{card.diagnostics.trend}</small>
-                    </article>
-                    <article>
-                      <span>RMSE</span>
-                      <strong>{fmt(card.diagnostics.rmse)}</strong>
+                    </Card>
+                    <Card size="small">
+                      <Statistic title="RMSE" value={fmt(card.diagnostics.rmse)} />
                       <small>residual error</small>
-                    </article>
-                    <article>
-                      <span>Confidence</span>
-                      <strong>{card.diagnostics.confidence}%</strong>
+                    </Card>
+                    <Card size="small">
+                      <Statistic title="Confidence" value={card.diagnostics.confidence} suffix="%" />
                       <small>{card.diagnostics.method}</small>
-                    </article>
+                    </Card>
                   </div>
                   <ResponsiveContainer width="100%" height={260}>
                     <AreaChart data={card.data}>
@@ -727,14 +643,19 @@ const VisualizationView = ({ type }) => {
                       <XAxis dataKey="month" tick={CHART_TICK} />
                       <YAxis tick={CHART_TICK} />
                       <Tooltip />
-                      <Area dataKey="actual" name="Observed station value" stroke="#446ACB" fill="#446ACB" fillOpacity={0.14} isAnimationActive animationDuration={800} />
-                      <Line dataKey="upper" name="Upper RMSE band" stroke="#f59e0b" strokeOpacity={0.42} strokeDasharray="3 3" dot={false} isAnimationActive animationDuration={900} />
-                      <Line dataKey="lower" name="Lower RMSE band" stroke="#f59e0b" strokeOpacity={0.42} strokeDasharray="3 3" dot={false} isAnimationActive animationDuration={900} />
-                      <Area dataKey="forecast" name="Forecast" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.16} strokeDasharray="6 4" isAnimationActive animationDuration={1100} />
+                      <Area dataKey="actual" name="Observed station value" stroke="#446ACB" fill="#446ACB" fillOpacity={0.14} isAnimationActive={false} />
+                      <Line dataKey="upper" name="Upper RMSE band" stroke="#f59e0b" strokeOpacity={0.42} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
+                      <Line dataKey="lower" name="Lower RMSE band" stroke="#f59e0b" strokeOpacity={0.42} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
+                      <Area dataKey="forecast" name="Forecast" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.16} strokeDasharray="6 4" isAnimationActive={false} />
                     </AreaChart>
                   </ResponsiveContainer>
-                </article>
+                </Card>
               ))}
+              {!!hiddenForecastCount && (
+                <Button type="dashed" block className="forecast-load-more" onClick={() => setForecastExpandedKey(forecastScopeKey)}>
+                  Show {hiddenForecastCount} more forecast charts
+                </Button>
+              )}
             </div>
           ) : (
             <div className="viz-empty">No station parameters with monthly values are available for this waterbody.</div>

@@ -1,28 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Button, Card, Select, Space, Tag } from 'antd';
+import { DownOutlined, RightOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
-import {
-  Cartesian2,
-  Cartesian3,
-  Color,
-  Credit,
-  EllipsoidTerrainProvider,
-  HeightReference,
-  Ion,
-  LabelStyle,
-  Rectangle,
-  UrlTemplateImageryProvider,
-  VerticalOrigin,
-  Viewer,
-} from 'cesium';
-import 'cesium/Build/Cesium/Widgets/widgets.css';
 import stationWorkbookUrl from '../../docs/wqm_stations.xlsx?url';
-import api from '../api/axios';
+import CesiumStationMap from '../components/CesiumStationMap';
+import encryptedStorage from '../utils/encryptedStorage';
 import { buildWaterbodyOptions, getReadableStations, usePublishedWqmDataset } from '../utils/wqmSheets';
 import './Waterbody3DMap.css';
 
-Ion.defaultAccessToken = '';
+const WATERBODY_GROUP_COLORS = {
+  'Priority Water Bodies': '#f97316',
+  'Other Water Bodies': '#14b8a6',
+  'Remaining WQM 2026 Sheets': '#6366f1',
+  Waterbodies: '#0ea5e9',
+};
 
-const normalizeForMatch = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const normalizeForMatch = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim();
 
 const WATERBODY_ALIASES = {
   'pudoc river': ['baler river'],
@@ -47,21 +45,69 @@ const isWaterbodyMatch = (location, matches) => {
   return false;
 };
 
-const getBounds = (locations) => {
-  if (!locations.length) return null;
-  const lats = locations.map((point) => point.lat);
-  const lngs = locations.map((point) => point.lng);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-  const latPad = Math.max((maxLat - minLat) * 0.65, 0.018);
-  const lngPad = Math.max((maxLng - minLng) * 0.65, 0.018);
+const getLocationStationNumber = (location) => {
+  const match = String(location?.id || '').match(/(?:^|_)(\d+)$/);
+  return match ? Number(match[1]) : null;
+};
+
+const getStationAssignmentKey = (waterbodyKey, station) => [
+  waterbodyKey,
+  station?.stnNo ?? '',
+  station?.stnId ?? '',
+  station?.address ?? '',
+].join('::');
+
+const parseCoordinateOverride = (value, fallback) => {
+  if (value === '' || value === null || value === undefined) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const getStationAddress = (location) => (
+  [location.barangay, location.province].filter(Boolean).join(', ') || 'Address not specified'
+);
+
+const formatCoordinates = (location) => `${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`;
+
+const getGroupColor = (group) => WATERBODY_GROUP_COLORS[group] || '#0ea5e9';
+
+const matchStationData = (location, stationList, allowNumberMatch = true) => {
+  const locationNo = getLocationStationNumber(location);
+  const workbookValues = [location.station, location.id, location.barangay]
+    .map(normalizeForMatch)
+    .filter(Boolean);
+
+  return stationList.find((station) => {
+    if (allowNumberMatch && Number.isFinite(Number(station.stnNo)) && Number(station.stnNo) === locationNo) {
+      return true;
+    }
+
+    const values = [station.stnId, station.address]
+      .map(normalizeForMatch)
+      .filter(Boolean);
+    return values.some((value) => workbookValues.some((workbookValue) => (
+      workbookValue === value || workbookValue.includes(value) || value.includes(workbookValue)
+    )));
+  }) || null;
+};
+
+const enrichLocation = (location, waterbody, stationList, profileSettings = {}) => {
+  const stationData = matchStationData(location, stationList);
+  const profile = profileSettings[waterbody?.key] || {};
+  const overrideKey = stationData ? getStationAssignmentKey(waterbody?.key, stationData) : null;
+  const override = overrideKey ? profile.stationOverrides?.[overrideKey] : null;
+  const overrideName = String(override?.name || '').trim();
+  const nextStationData = overrideName && stationData ? { ...stationData, stnId: overrideName } : stationData;
+
   return {
-    west: minLng - lngPad,
-    south: minLat - latPad,
-    east: maxLng + lngPad,
-    north: maxLat + latPad,
+    ...location,
+    station: overrideName || location.station,
+    lat: parseCoordinateOverride(override?.lat, location.lat),
+    lng: parseCoordinateOverride(override?.lng, location.lng),
+    stationData: nextStationData,
+    waterbodyName: waterbody?.name || location.waterbodyRiver || 'Waterbody',
+    waterbodyGroup: waterbody?.group || 'Waterbodies',
+    markerColor: getGroupColor(waterbody?.group),
   };
 };
 
@@ -85,17 +131,14 @@ const loadStationLocations = async () => {
 };
 
 const Waterbody3DMap = () => {
-  const mountRef = useRef(null);
-  const viewerRef = useRef(null);
   const { year, sheets, loading, error } = usePublishedWqmDataset();
   const waterbodies = useMemo(() => buildWaterbodyOptions(sheets), [sheets]);
   const [waterbodyKey, setWaterbodyKey] = useState('');
   const [stationLocations, setStationLocations] = useState([]);
+  const [locationsLoaded, setLocationsLoaded] = useState(false);
   const [locationError, setLocationError] = useState('');
-  const [mapTiler, setMapTiler] = useState({
-    key: import.meta.env.VITE_MAPTILER_API_KEY || import.meta.env.VITE_MAPTILER_KEY || '',
-    configured: false,
-  });
+  const [collapsedWaterbodies, setCollapsedWaterbodies] = useState(() => new Set());
+  const [profileSettings, setProfileSettings] = useState(() => encryptedStorage.getItem('wqms_waterbody_profile_settings') || {});
 
   const activeWaterbodyKey = waterbodies.some((waterbody) => waterbody.key === waterbodyKey)
     ? waterbodyKey
@@ -103,195 +146,220 @@ const Waterbody3DMap = () => {
   const selected = waterbodies.find((waterbody) => waterbody.key === activeWaterbodyKey) || waterbodies[0];
   const selectedSheet = sheets.find((sheet) => sheet.key === selected?.key);
   const stations = useMemo(() => getReadableStations(selectedSheet), [selectedSheet]);
+  const [showAllStations, setShowAllStations] = useState(false);
+  const stationScope = showAllStations ? 'all' : 'selected';
+  const waterbodySelectOptions = useMemo(() => {
+    const grouped = new Map();
+    waterbodies.forEach((waterbody) => {
+      const group = waterbody.group || 'Waterbodies';
+      const options = grouped.get(group) || [];
+      options.push({ value: waterbody.key, label: waterbody.name, searchLabel: waterbody.name });
+      grouped.set(group, options);
+    });
+    return [...grouped.entries()].map(([label, options]) => ({ label, options }));
+  }, [waterbodies]);
 
   useEffect(() => {
-    if (!waterbodyKey && waterbodies[0]?.key) setWaterbodyKey(waterbodies[0].key);
+    if (waterbodyKey || !waterbodies[0]?.key) return;
+    queueMicrotask(() => setWaterbodyKey(waterbodies[0].key));
   }, [waterbodies, waterbodyKey]);
 
   useEffect(() => {
     let cancelled = false;
     loadStationLocations()
       .then((locations) => {
-        if (!cancelled) setStationLocations(locations);
+        if (!cancelled) {
+          setStationLocations(locations);
+          setLocationsLoaded(true);
+        }
       })
       .catch(() => {
-        if (!cancelled) setLocationError('Unable to load station coordinates workbook.');
+        if (!cancelled) {
+          setLocationError('Unable to load station coordinates workbook.');
+          setLocationsLoaded(true);
+        }
       });
     return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (mapTiler.key) return;
-    let cancelled = false;
-    api.get('/water/maptiler-key')
-      .then(({ data }) => {
-        if (!cancelled) setMapTiler({ key: data?.key || '', configured: Boolean(data?.configured) });
-      })
-      .catch(() => {
-        if (!cancelled) setMapTiler({ key: '', configured: false });
-      });
-    return () => { cancelled = true; };
-  }, [mapTiler.key]);
+    const refreshProfileSettings = (event) => {
+      setProfileSettings(event.detail || encryptedStorage.getItem('wqms_waterbody_profile_settings') || {});
+    };
+    window.addEventListener('wqms:waterbody-profile-settings', refreshProfileSettings);
+    return () => window.removeEventListener('wqms:waterbody-profile-settings', refreshProfileSettings);
+  }, []);
 
   const matchedLocations = useMemo(() => {
     if (!selected) return [];
     const matches = getWaterbodyMatches(activeWaterbodyKey, selected.name);
-    const stationNames = stations.map((station) => normalizeForMatch(station.stnId));
-    const stationMatches = (location) => {
-      const workbookStation = normalizeForMatch(location.station);
-      return !workbookStation || stationNames.some((name) => name && (
-        workbookStation === name || workbookStation.includes(name) || name.includes(workbookStation)
-      ));
+    const stationTokens = stations.map((station) => ({
+      no: Number(station.stnNo),
+      values: [station.stnId, station.address]
+        .map(normalizeForMatch)
+        .filter(Boolean),
+    }));
+    const stationMatches = (location, allowNumberMatch = false) => {
+      const workbookValues = [location.station, location.id, location.barangay]
+        .map(normalizeForMatch)
+        .filter(Boolean);
+      if (!workbookValues.length) return true;
+      return stationTokens.some(({ no, values }) => {
+        if (allowNumberMatch && Number.isFinite(no) && getLocationStationNumber(location) === no) return true;
+        return values.some((value) => workbookValues.some((workbookValue) => (
+          workbookValue === value || workbookValue.includes(value) || value.includes(workbookValue)
+        )));
+      });
     };
-    const byWaterbody = stationLocations.filter((location) => isWaterbodyMatch(location, matches)).filter(stationMatches);
-    if (byWaterbody.length) return byWaterbody;
-    return stationLocations.filter(stationMatches);
-  }, [activeWaterbodyKey, selected, stationLocations, stations]);
+    const waterbodyMatches = stationLocations.filter((location) => isWaterbodyMatch(location, matches));
+    const byWaterbody = waterbodyMatches.filter((location) => stationMatches(location, true));
+    const matched = byWaterbody.length
+      ? byWaterbody
+      : waterbodyMatches.length
+        ? waterbodyMatches
+        : stationLocations.filter((location) => stationMatches(location));
+    return matched.map((location) => enrichLocation(location, selected, stations, profileSettings));
+  }, [activeWaterbodyKey, profileSettings, selected, stationLocations, stations]);
 
-  useEffect(() => {
-    if (!mountRef.current || !mapTiler.key || viewerRef.current) return undefined;
+  const allMappedLocations = useMemo(() => stationLocations.map((location) => {
+    const waterbody = waterbodies.find((item) => isWaterbodyMatch(location, getWaterbodyMatches(item.key, item.name)));
+    const sheet = sheets.find((item) => item.key === waterbody?.key);
+    return enrichLocation(location, waterbody, getReadableStations(sheet), profileSettings);
+  }), [profileSettings, sheets, stationLocations, waterbodies]);
 
-    const viewer = new Viewer(mountRef.current, {
-      animation: false,
-      baseLayerPicker: false,
-      fullscreenButton: false,
-      geocoder: false,
-      homeButton: false,
-      infoBox: true,
-      navigationHelpButton: false,
-      sceneModePicker: true,
-      selectionIndicator: true,
-      timeline: false,
-      contextOptions: {
-        webgl: {
-          preserveDrawingBuffer: true,
-        },
-      },
-      terrainProvider: new EllipsoidTerrainProvider(),
-      imageryProvider: new UrlTemplateImageryProvider({
-        url: `https://api.maptiler.com/maps/satellite/{z}/{x}/{y}.jpg?key=${encodeURIComponent(mapTiler.key)}`,
-        credit: new Credit('MapTiler satellite imagery'),
-        maximumLevel: 20,
-      }),
+  const visibleLocations = showAllStations ? allMappedLocations : matchedLocations;
+  const hasCoordinateMiss = locationsLoaded && !loading && !error && !locationError && !visibleLocations.length;
+  const groupedVisibleLocations = useMemo(() => {
+    const grouped = new Map();
+    visibleLocations.forEach((location, index) => {
+      const key = location.waterbodyName || location.waterbodyRiver || 'Unassigned waterbody';
+      const current = grouped.get(key) || {
+        key,
+        name: key,
+        group: location.waterbodyGroup || 'Waterbodies',
+        locations: [],
+      };
+      current.locations.push({ ...location, displayIndex: index + 1 });
+      grouped.set(key, current);
     });
-
-    viewer.scene.globe.enableLighting = true;
-    viewer.scene.globe.depthTestAgainstTerrain = false;
-    viewer.scene.skyAtmosphere.show = true;
-    viewer.scene.screenSpaceCameraController.minimumZoomDistance = 80;
-    viewer.scene.screenSpaceCameraController.maximumZoomDistance = 8000000;
-    viewerRef.current = viewer;
-
-    return () => {
-      viewerRef.current = null;
-      viewer.destroy();
-    };
-  }, [mapTiler.key]);
-
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer || !matchedLocations.length) return;
-
-    viewer.entities.removeAll();
-    const bounds = getBounds(matchedLocations);
-    const positions = [];
-
-    matchedLocations.forEach((location, index) => {
-      const position = Cartesian3.fromDegrees(location.lng, location.lat, 28 + (index % 4) * 9);
-      positions.push(position);
-      viewer.entities.add({
-        id: `station-${location.id || index}`,
-        name: location.station || location.id || `Station ${index + 1}`,
-        position,
-        description: [
-          `<strong>${selected?.name || 'Waterbody'}</strong>`,
-          `<br/>Station: ${location.station || location.id || 'Station'}`,
-          `<br/>Barangay/Province: ${[location.barangay, location.province].filter(Boolean).join(', ') || 'Not specified'}`,
-          `<br/>Coordinates: ${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`,
-        ].join(''),
-        point: {
-          pixelSize: 13,
-          color: Color.ORANGE,
-          outlineColor: Color.WHITE,
-          outlineWidth: 2,
-          heightReference: HeightReference.RELATIVE_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-        label: {
-          text: location.station || String(location.id || `Station ${index + 1}`),
-          font: '700 13px Segoe UI, Arial, sans-serif',
-          fillColor: Color.WHITE,
-          outlineColor: Color.BLACK,
-          outlineWidth: 4,
-          style: LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset: new Cartesian2(0, -24),
-          verticalOrigin: VerticalOrigin.BOTTOM,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          scaleByDistance: undefined,
-        },
-      });
+    return [...grouped.values()];
+  }, [visibleLocations]);
+  const toggleWaterbodyGroup = (key) => {
+    setCollapsedWaterbodies((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
     });
-
-    if (positions.length > 1) {
-      viewer.entities.add({
-        name: `${selected?.name || 'Waterbody'} station route`,
-        polyline: {
-          positions,
-          width: 3,
-          material: Color.CYAN.withAlpha(0.82),
-          clampToGround: false,
-        },
-      });
-    }
-
-    if (bounds) {
-      viewer.camera.flyTo({
-        destination: Rectangle.fromDegrees(bounds.west, bounds.south, bounds.east, bounds.north),
-        duration: 0.9,
-      });
-    }
-  }, [matchedLocations, selected?.name]);
+  };
 
   return (
     <div className="map3d-page">
-      <section className="map3d-header">
+      <Card className="map3d-header" size="small">
         <div>
           <p>Cesium 3D Waterbody Map</p>
-          <h2>{selected?.name || 'Waterbody'} · CY {year}</h2>
+          <h2>{selected?.name || 'Waterbody'} &middot; CY {year}</h2>
         </div>
-        <label>
-          <span>Waterbody</span>
-          <select value={activeWaterbodyKey} onChange={(event) => setWaterbodyKey(event.target.value)}>
-            {waterbodies.map((waterbody) => <option key={waterbody.key} value={waterbody.key}>{waterbody.name}</option>)}
-          </select>
-        </label>
-      </section>
+        <Space className="map3d-controls" size="middle" wrap>
+          <label>
+            <span>Waterbody</span>
+            <Select
+              value={activeWaterbodyKey}
+              onChange={setWaterbodyKey}
+              options={waterbodySelectOptions}
+              showSearch
+              optionFilterProp="searchLabel"
+              popupClassName="wqm-map-select-popup map3d-waterbody-popup"
+              getPopupContainer={(trigger) => trigger.parentElement}
+              style={{ minWidth: 240 }}
+            />
+          </label>
+          <label className="map3d-scope-field">
+            <span>Station Scope</span>
+            <Select
+              value={stationScope}
+              onChange={(value) => setShowAllStations(value === 'all')}
+              options={[
+                { value: 'selected', label: 'Selected waterbody' },
+                { value: 'all', label: 'Show all stations' },
+              ]}
+              popupClassName="wqm-map-select-popup map3d-waterbody-popup"
+              getPopupContainer={(trigger) => trigger.parentElement}
+              style={{ minWidth: 190 }}
+            />
+          </label>
+        </Space>
+      </Card>
 
-      {(loading || error || locationError || !mapTiler.key || !matchedLocations.length) && (
-        <section className="map3d-state">
+      {(loading || error || locationError || hasCoordinateMiss) && (
+        <Card className="map3d-state" size="small">
           {loading && <div className="app-loading compact"><span />Loading published WQM dataset...</div>}
           {!loading && error && <p>{error}</p>}
           {!loading && locationError && <p>{locationError}</p>}
-          {!loading && !mapTiler.key && <p>MapTiler API key is not configured. Add MAPTILER_API_KEY to server/.env and restart the backend.</p>}
-          {!loading && mapTiler.key && !matchedLocations.length && <p>No station coordinates matched this waterbody.</p>}
-        </section>
+          {hasCoordinateMiss && <p>No station coordinates matched this waterbody.</p>}
+        </Card>
       )}
 
       <section className="map3d-stage">
-        <div ref={mountRef} className="map3d-canvas" />
-        <aside className="map3d-panel">
-          <span>{matchedLocations.length} mapped stations</span>
-          <strong>{selected?.name}</strong>
-          <p>Cesium globe with MapTiler satellite imagery, workbook station coordinates, station labels, and a waterbody station path.</p>
-          <div>
-            {matchedLocations.map((location) => (
-              <small key={`${location.id}-${location.lat}-${location.lng}`}>
-                {location.station || location.id}
-              </small>
+        <CesiumStationMap
+          locations={visibleLocations}
+          waterbodyName={selected?.name || 'Waterbody'}
+          height={620}
+          defaultTerrainEnabled
+          defaultBuildingsEnabled
+          birdseye
+          emptyMessage="No station coordinates matched this waterbody."
+        />
+      </section>
+
+      {!!visibleLocations.length && (
+        <Card className="map3d-station-details" size="small">
+          <div className="map3d-details-head">
+            <div>
+              <p>Mapped station details</p>
+              <h3>{showAllStations ? 'All mapped stations' : selected?.name}</h3>
+            </div>
+            <Tag color="blue">{visibleLocations.length} coordinate points</Tag>
+          </div>
+          <div className="map3d-waterbody-groups">
+            {groupedVisibleLocations.map((group) => (
+              <section className="map3d-waterbody-group" key={group.key}>
+                <div className="map3d-waterbody-group-head">
+                  <Button
+                    type="text"
+                    size="small"
+                    className="map3d-group-toggle"
+                    icon={collapsedWaterbodies.has(group.key) ? <RightOutlined /> : <DownOutlined />}
+                    onClick={() => toggleWaterbodyGroup(group.key)}
+                    aria-label={`${collapsedWaterbodies.has(group.key) ? 'Expand' : 'Collapse'} ${group.name}`}
+                  />
+                  <span style={{ '--group-color': getGroupColor(group.group) }} />
+                  <button type="button" onClick={() => toggleWaterbodyGroup(group.key)}>
+                    {group.name}
+                  </button>
+                  {/* <Tag>{group.locations.length} station{group.locations.length === 1 ? '' : 's'}</Tag> */}
+                </div>
+                {!collapsedWaterbodies.has(group.key) && (
+                  <div className="map3d-detail-grid">
+                    {group.locations.map((location) => (
+                      <Card className="map3d-detail-card" size="small" key={`${location.id}-${location.lat}-${location.lng}`}>
+                        <div className="map3d-detail-index" style={{ background: getGroupColor(location.waterbodyGroup) }}>
+                          {location.displayIndex}
+                        </div>
+                        <div className="map3d-detail-body">
+                          <strong>{location.station || location.id || `Station ${location.displayIndex}`}</strong>
+                          <span>{getStationAddress(location)}</span>
+                          <code>{formatCoordinates(location)}</code>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </section>
             ))}
           </div>
-        </aside>
-      </section>
+        </Card>
+      )}
     </div>
   );
 };

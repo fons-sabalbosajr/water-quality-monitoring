@@ -5,10 +5,15 @@ import {
   Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
+import * as XLSX from 'xlsx';
 import api from '../api/axios';
+import stationWorkbookUrl from '../../docs/wqm_stations.xlsx?url';
+import encryptedStorage from '../utils/encryptedStorage';
 import {
   buildWaterbodyOptions,
+  getReadableStations,
   publishWqmYear,
+  WQM_DRAFTS_KEY,
   WQM_PUBLISHED_YEAR_KEY,
   WQM_YEAR_OPTIONS,
   useWqmSheets,
@@ -26,6 +31,7 @@ const VISUALIZATION_YEAR_OPTIONS = WQM_YEAR_OPTIONS.map((year) => [
   String(year),
   year === 2026 ? '2026 active dataset' : `${year} MongoDB dataset`,
 ]);
+const TABLE_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const ACCESS_FEATURES = [
   ['dashboard', 'Dashboard', 'user'],
@@ -36,9 +42,106 @@ const ACCESS_FEATURES = [
   ['developerManager', 'Developer Manager', 'developer'],
 ];
 
+const getStationAssignmentKey = (waterbodyKey, station) => [
+  waterbodyKey,
+  station?.stnNo ?? '',
+  station?.stnId ?? '',
+  station?.address ?? '',
+].join('::');
+
+const normalizeForMatch = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim();
+
+const getLocationStationNumber = (location) => {
+  const match = String(location?.id || '').match(/(?:^|_)(\d+)$/);
+  return match ? Number(match[1]) : null;
+};
+
+const loadStationLocations = async () => {
+  const response = await fetch(stationWorkbookUrl);
+  const buffer = await response.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  const workbookSheet = workbook.Sheets.Station_List || workbook.Sheets[workbook.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(workbookSheet, { defval: '' })
+    .map((row) => ({
+      id: row.ID,
+      station: String(row.Station || '').trim(),
+      waterbodyRiver: String(row.Waterbody || row['Waterbody River'] || row['Waterbody river'] || '').trim(),
+      barangay: String(row.Barangay || '').trim(),
+      province: String(row.Province || '').trim(),
+      lat: Number(row.LAT),
+      lng: Number(row.LONG),
+    }))
+    .filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng));
+};
+
+const matchStationLocation = (station, waterbody, stationLocations) => {
+  const waterbodyName = normalizeForMatch(waterbody?.name);
+  const stationNo = Number(station?.stnNo);
+  const stationValues = [station?.stnId, station?.address].map(normalizeForMatch).filter(Boolean);
+  return stationLocations.find((location) => {
+    const locationWaterbody = normalizeForMatch(location.waterbodyRiver);
+    if (waterbodyName && locationWaterbody && locationWaterbody !== waterbodyName) return false;
+    if (Number.isFinite(stationNo) && getLocationStationNumber(location) === stationNo) return true;
+    const locationValues = [location.station, location.barangay, location.province].map(normalizeForMatch).filter(Boolean);
+    return stationValues.some((value) => locationValues.some((locationValue) => (
+      value === locationValue || value.includes(locationValue) || locationValue.includes(value)
+    )));
+  }) || null;
+};
+
+const usePaginatedRows = (rows, defaultPageSize = 10) => {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(defaultPageSize);
+  const total = rows.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const start = (safePage - 1) * pageSize;
+  const pagedRows = rows.slice(start, start + pageSize);
+
+  return {
+    page: safePage,
+    pageSize,
+    pageCount,
+    total,
+    start,
+    rows: pagedRows,
+    setPage,
+    setPageSize: (nextSize) => {
+      setPageSize(nextSize);
+      setPage(1);
+    },
+  };
+};
+
+const TablePagination = ({ pagination, label = 'Rows' }) => {
+  if (!pagination.total) return null;
+  const first = pagination.total ? pagination.start + 1 : 0;
+  const last = Math.min(pagination.start + pagination.pageSize, pagination.total);
+
+  return (
+    <div className="settings-pagination" aria-label={`${label} pagination`}>
+      <span>{first}-{last} of {pagination.total}</span>
+      <label>
+        <span>Page size</span>
+        <select value={pagination.pageSize} onChange={(event) => pagination.setPageSize(Number(event.target.value))}>
+          {TABLE_PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+        </select>
+      </label>
+      <button type="button" disabled={pagination.page <= 1} onClick={() => pagination.setPage(pagination.page - 1)}>Prev</button>
+      <strong>{pagination.page} / {pagination.pageCount}</strong>
+      <button type="button" disabled={pagination.page >= pagination.pageCount} onClick={() => pagination.setPage(pagination.page + 1)}>Next</button>
+    </div>
+  );
+};
+
 const getStoredAccessSettings = () => {
   try {
-    const stored = JSON.parse(localStorage.getItem('wqms_access_settings') || 'null');
+    const stored = encryptedStorage.getItem('wqms_access_settings');
     return Object.fromEntries(ACCESS_FEATURES.map(([key, , fallback]) => [key, stored?.[key] || fallback]));
   } catch {
     return Object.fromEntries(ACCESS_FEATURES.map(([key, , fallback]) => [key, fallback]));
@@ -52,7 +155,7 @@ const ManageAccessSettings = ({ currentUser }) => {
   const updateAccess = (feature, role) => {
     const next = { ...settings, [feature]: role };
     setSettings(next);
-    localStorage.setItem('wqms_access_settings', JSON.stringify(next));
+    encryptedStorage.setItem('wqms_access_settings', next);
     window.dispatchEvent(new CustomEvent('wqms:access-settings', { detail: next }));
     setSaved('Access settings saved.');
     logActivity('Updated app access settings', { feature, role }, currentUser);
@@ -82,7 +185,7 @@ const ManageAccessSettings = ({ currentUser }) => {
 };
 
 const VisualizationYearSettings = ({ currentUser }) => {
-  const [year, setYear] = useState(() => localStorage.getItem(WQM_PUBLISHED_YEAR_KEY) || '2026');
+  const [year, setYear] = useState(() => encryptedStorage.getItem(WQM_PUBLISHED_YEAR_KEY) || '2026');
   const [saved, setSaved] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -143,9 +246,10 @@ const VisualizationYearSettings = ({ currentUser }) => {
 const WaterbodyProfileSettings = ({ currentUser }) => {
   const sheets = useWqmSheets();
   const waterbodies = useMemo(() => buildWaterbodyOptions(sheets), [sheets]);
+  const [stationLocations, setStationLocations] = useState([]);
   const [settings, setSettings] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem('wqms_waterbody_profile_settings') || '{}');
+      return encryptedStorage.getItem('wqms_waterbody_profile_settings') || {};
     } catch {
       return {};
     }
@@ -154,7 +258,23 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
   const activeKey = waterbodies[0]?.key || '';
   const [selectedKey, setSelectedKey] = useState(activeKey);
   const selectedWaterbody = waterbodies.find((item) => item.key === selectedKey) || waterbodies[0];
+  const selectedSheet = sheets.find((sheet) => sheet.key === selectedWaterbody?.key);
+  const selectedStations = useMemo(() => getReadableStations(selectedSheet), [selectedSheet]);
   const current = settings[selectedWaterbody?.key] || {};
+  const stationAssignments = current.stationAssignments || {};
+  const stationOverrides = current.stationOverrides || {};
+
+  useEffect(() => {
+    let cancelled = false;
+    loadStationLocations()
+      .then((locations) => {
+        if (!cancelled) setStationLocations(locations);
+      })
+      .catch(() => {
+        if (!cancelled) setStationLocations([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!selectedKey && activeKey) {
@@ -172,10 +292,35 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
       },
     };
     setSettings(next);
-    localStorage.setItem('wqms_waterbody_profile_settings', JSON.stringify(next));
+    encryptedStorage.setItem('wqms_waterbody_profile_settings', next);
     window.dispatchEvent(new CustomEvent('wqms:waterbody-profile-settings', { detail: next }));
     setSaved('Waterbody profile settings saved.');
     logActivity('Updated waterbody profile settings', { waterbody: selectedWaterbody.name, field }, currentUser);
+  };
+
+  const updateStationAssignment = (station, targetWaterbodyKey) => {
+    if (!selectedWaterbody) return;
+    const assignmentKey = getStationAssignmentKey(selectedWaterbody.key, station);
+    const nextAssignments = { ...stationAssignments };
+    if (!targetWaterbodyKey || targetWaterbodyKey === selectedWaterbody.key) {
+      delete nextAssignments[assignmentKey];
+    } else {
+      nextAssignments[assignmentKey] = targetWaterbodyKey;
+    }
+    updateSetting('stationAssignments', nextAssignments);
+  };
+
+  const updateStationOverride = (station, field, value) => {
+    if (!selectedWaterbody) return;
+    const assignmentKey = getStationAssignmentKey(selectedWaterbody.key, station);
+    const nextOverrides = {
+      ...stationOverrides,
+      [assignmentKey]: {
+        ...(stationOverrides[assignmentKey] || {}),
+        [field]: value,
+      },
+    };
+    updateSetting('stationOverrides', nextOverrides);
   };
 
   return (
@@ -210,6 +355,82 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
             <span>Profile Notes</span>
             <textarea value={current.notes || ''} onChange={(event) => updateSetting('notes', event.target.value)} />
           </label>
+        </div>
+      )}
+      {selectedWaterbody && (
+        <div className="station-regroup-panel">
+          <div className="station-regroup-head">
+            <div>
+              <h4>Station Regrouping</h4>
+              <p>Move stations from this waterbody into another available waterbody for profile and location organization.</p>
+            </div>
+            <span>{selectedStations.length} stations</span>
+          </div>
+          <div className="station-regroup-table-wrap">
+            <table className="station-regroup-table">
+              <thead>
+                <tr>
+                  <th>No.</th>
+                  <th>Station</th>
+                  <th>Coordinates</th>
+                  <th>Address</th>
+                  <th>Assigned Waterbody</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedStations.map((station) => {
+                  const assignmentKey = getStationAssignmentKey(selectedWaterbody.key, station);
+                  const assignedKey = stationAssignments[assignmentKey] || selectedWaterbody.key;
+                  const override = stationOverrides[assignmentKey] || {};
+                  const location = matchStationLocation(station, selectedWaterbody, stationLocations);
+                  const stationName = override.name ?? station.stnId ?? '';
+                  const lat = override.lat ?? (Number.isFinite(location?.lat) ? String(location.lat) : '');
+                  const lng = override.lng ?? (Number.isFinite(location?.lng) ? String(location.lng) : '');
+                  return (
+                    <tr key={assignmentKey}>
+                      <td>{station.stnNo}</td>
+                      <td>
+                        <input
+                          value={stationName}
+                          onChange={(event) => updateStationOverride(station, 'name', event.target.value)}
+                          aria-label={`Station name for ${station.stnId}`}
+                        />
+                      </td>
+                      <td>
+                        <div className="station-coordinate-fields">
+                          <input
+                            inputMode="decimal"
+                            value={lat}
+                            onChange={(event) => updateStationOverride(station, 'lat', event.target.value)}
+                            aria-label={`Latitude for ${station.stnId}`}
+                          />
+                          <input
+                            inputMode="decimal"
+                            value={lng}
+                            onChange={(event) => updateStationOverride(station, 'lng', event.target.value)}
+                            aria-label={`Longitude for ${station.stnId}`}
+                          />
+                        </div>
+                      </td>
+                      <td>{station.address || 'Address not specified'}</td>
+                      <td>
+                        <select value={assignedKey} onChange={(event) => updateStationAssignment(station, event.target.value)}>
+                          {waterbodies.map((waterbody) => (
+                            <option key={waterbody.key} value={waterbody.key}>{waterbody.name}</option>
+                          ))}
+                        </select>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!selectedStations.length && (
+                  <tr>
+                    <td colSpan="5" className="empty-log-cell">No stations are available for this waterbody.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
@@ -317,6 +538,7 @@ const AccountsPanel = ({ currentUser }) => {
   const [msg, setMsg] = useState('');
   const [editingUser, setEditingUser] = useState(null);
   const [userDraft, setUserDraft] = useState(null);
+  const userPagination = usePaginatedRows(users, 10);
 
   useEffect(() => {
     let mounted = true;
@@ -411,9 +633,9 @@ const AccountsPanel = ({ currentUser }) => {
             </tr>
           </thead>
           <tbody>
-            {users.map((u, i) => (
+            {userPagination.rows.map((u, i) => (
               <tr key={u._id} className={u._id === currentUser._id ? 'row-self' : ''}>
-                <td className="td-num">{i + 1}</td>
+                <td className="td-num">{userPagination.start + i + 1}</td>
                 <td className="td-name">
                   <span className="u-avatar">{u.name.charAt(0).toUpperCase()}</span>
                   {u.name}
@@ -459,6 +681,7 @@ const AccountsPanel = ({ currentUser }) => {
           </tbody>
         </table>
       </div>
+      <TablePagination pagination={userPagination} label="User accounts" />
       {editingUser && userDraft && (
         <div className="settings-modal-backdrop" role="presentation" onClick={() => setEditingUser(null)}>
           <section className="settings-user-modal" role="dialog" aria-modal="true" aria-label="Manage user access" onClick={(event) => event.stopPropagation()}>
@@ -617,6 +840,7 @@ const EmailPanel = () => {
 
 const LogsPanel = ({ user }) => {
   const [logs, setLogs] = useState(getAppLogs());
+  const logsPagination = usePaginatedRows(logs, 10);
   const actionData = useMemo(() => {
     const counts = logs.reduce((acc, log) => {
       acc[log.action] = (acc[log.action] || 0) + 1;
@@ -675,7 +899,7 @@ const LogsPanel = ({ user }) => {
             </tr>
           </thead>
           <tbody>
-            {logs.map((log) => (
+            {logsPagination.rows.map((log) => (
               <tr key={log.id}>
                 <td className="td-date">{new Date(log.at).toLocaleString('en-PH')}</td>
                 <td>{log.actor}<span className="log-role">{log.role}</span></td>
@@ -687,6 +911,7 @@ const LogsPanel = ({ user }) => {
           </tbody>
         </table>
       </div>
+      <TablePagination pagination={logsPagination} label="App logs" />
     </div>
   );
 };
@@ -694,18 +919,18 @@ const LogsPanel = ({ user }) => {
 const BackupPanel = ({ user }) => {
   const [status, setStatus] = useState('');
   const backupRows = [
-    { name: 'Tabular Drafts', value: localStorage.getItem('wqm_2026_drafts') ? 'Available' : 'No local draft' },
+    { name: 'Tabular Drafts', value: encryptedStorage.getItem(WQM_DRAFTS_KEY) ? 'Available' : 'No local draft' },
     { name: 'App Logs', value: `${getAppLogs().length} records` },
-    { name: 'Theme Config', value: localStorage.getItem('theme') || 'default' },
+    { name: 'Theme Config', value: encryptedStorage.getItem('wqm_theme') || 'default' },
   ];
 
   const exportBackup = () => {
     const payload = {
       exportedAt: new Date().toISOString(),
       app: 'EMBR3-WQMS',
-      localDrafts: JSON.parse(localStorage.getItem('wqm_2026_drafts') || 'null'),
+      localDrafts: encryptedStorage.getItem(WQM_DRAFTS_KEY),
       appLogs: getAppLogs(),
-      theme: localStorage.getItem('theme'),
+      theme: encryptedStorage.getItem('wqm_theme'),
       config: { basePath: '/water-quality-monitoring', host: '10.14.77.183', port: 5173 },
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -724,9 +949,9 @@ const BackupPanel = ({ user }) => {
     if (!file) return;
     const text = await file.text();
     const payload = JSON.parse(text);
-    if (payload.localDrafts) localStorage.setItem('wqm_2026_drafts', JSON.stringify(payload.localDrafts));
-    if (payload.appLogs) localStorage.setItem('wqms_app_logs', JSON.stringify(payload.appLogs));
-    if (payload.theme) localStorage.setItem('theme', payload.theme);
+    if (payload.localDrafts) encryptedStorage.setItem(WQM_DRAFTS_KEY, payload.localDrafts);
+    if (payload.appLogs) encryptedStorage.setItem('wqms_app_logs', payload.appLogs);
+    if (payload.theme) encryptedStorage.setItem('wqm_theme', payload.theme);
     logActivity('Imported app backup', { file: file.name }, user);
     setStatus('Backup imported. Refresh the app to reload restored local data.');
   };
@@ -757,6 +982,7 @@ const AiForecastPanel = () => {
   const [status, setStatus] = useState(null);
   const [readings, setReadings] = useState([]);
   const [message, setMessage] = useState('');
+  const readingsPagination = usePaginatedRows(readings, 10);
 
   const refreshStatus = useCallback(() => {
     setMessage('');
@@ -818,7 +1044,7 @@ const AiForecastPanel = () => {
             </tr>
           </thead>
           <tbody>
-            {readings.map((reading) => (
+            {readingsPagination.rows.map((reading) => (
               <tr key={reading.id}>
                 <td>{reading.location}</td>
                 <td>{reading.ph}</td>
@@ -832,6 +1058,7 @@ const AiForecastPanel = () => {
           </tbody>
         </table>
       </div>
+      <TablePagination pagination={readingsPagination} label="AI readings" />
       <div className="settings-toolbar">
         <button className="settings-btn primary" onClick={refreshStatus}>Check AI Status</button>
       </div>

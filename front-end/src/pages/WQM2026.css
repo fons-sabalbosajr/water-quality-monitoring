@@ -974,6 +974,14 @@
   color: var(--text-primary);
 }
 
+[data-theme='dark'] .ant-wqm2026 .wqm-ant-search.ant-input-affix-wrapper,
+[data-theme='dark'] .ant-wqm2026 .wqm-ant-search input,
+[data-theme='dark'] .ant-wqm2026 .wqm-ant-search .ant-input-prefix,
+[data-theme='dark'] .ant-wqm2026 .wqm-ant-search .ant-input-clear-icon {
+  background: var(--input-bg);
+  color: var(--text-primary);
+}
+
 [data-theme='dark'] .ant-wqm2026 .ant-table-placeholder > td,
 [data-theme='dark'] .ant-wqm2026 .ant-empty-description,
 [data-theme='dark'] .ant-wqm2026 .ant-pagination-options,
@@ -1125,6 +1133,49 @@
   background: var(--input-bg);
   border-color: var(--border);
   color: var(--text-primary);
+}
+
+[data-theme='dark'] .wqm-station-modal-root .ant-modal-content,
+[data-theme='dark'] .wqm-station-modal-root .ant-modal-header,
+[data-theme='dark'] .wqm-station-modal-root .ant-modal-footer {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .wqm-station-modal-root .ant-modal-title,
+[data-theme='dark'] .wqm-station-modal-root .ant-modal-close,
+[data-theme='dark'] .wqm-station-modal-root .station-modal-grid span {
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .wqm-station-modal-root .ant-input,
+[data-theme='dark'] .wqm-station-modal-root .ant-input-disabled,
+[data-theme='dark'] .wqm-station-modal-root textarea.ant-input,
+[data-theme='dark'] .wqm-station-modal-root .parameter-editor-ant-table .ant-input {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .wqm-station-modal-root .parameter-editor-ant-table .ant-table,
+[data-theme='dark'] .wqm-station-modal-root .parameter-editor-ant-table .ant-table-container,
+[data-theme='dark'] .wqm-station-modal-root .parameter-editor-ant-table .ant-table-content,
+[data-theme='dark'] .wqm-station-modal-root .parameter-editor-ant-table .ant-table-body {
+  background: var(--bg-card);
+}
+
+[data-theme='dark'] .wqm-station-modal-root .parameter-editor-ant-table .ant-table-thead > tr > th {
+  background: var(--table-head);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .wqm-station-modal-root .parameter-editor-ant-table .ant-table-tbody > tr > td {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .wqm-station-modal-root .parameter-editor-ant-table .ant-table-tbody > tr:hover > td {
+  background: var(--row-hover) !important;
 }
 
 [data-theme='dark'] .ant-wqm2026 .ant-btn-primary {

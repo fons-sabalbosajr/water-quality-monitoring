@@ -1,16 +1,49 @@
-# React + Vite
+# EMBR3-WQMS Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React and Vite client for EMBR3 Water Quality Monitoring System.
 
-Currently, two official plugins are available:
+## Commands
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```powershell
+cmd /c npm install
+cmd /c npm run dev
+cmd /c npm run lint
+cmd /c npm run build
+```
 
-## React Compiler
+## Important Paths
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `src/pages/Home.jsx` - dashboard shell and lazy-loaded visualization routing.
+- `src/pages/WQM2026.jsx` - tabular WQM data view and editing.
+- `src/pages/Visualizations.jsx` - analytical charts and forecast charts.
+- `src/pages/Waterbody3DMap.jsx` - Cesium 3D waterbody map.
+- `src/utils/wqmSheets.js` - shared WQM year and sheet logic.
+- `src/utils/wqmData.js` - parameter value, unit, and station helpers.
+- `docs/` - Excel workbooks used by the app.
+- `public/cesium/` - copied Cesium static assets.
 
-## Expanding the ESLint configuration
+## API Base URL
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Local development uses `/api` through the Vite proxy.
+
+Production defaults to:
+
+```text
+/water-quality-monitoring/api
+```
+
+Override with:
+
+```env
+VITE_API_BASE_URL=/custom/path/api
+```
+
+## Build Path
+
+The Vite base path is:
+
+```text
+/water-quality-monitoring/
+```
+
+Deploy the built `dist/` directory under the same subpath.

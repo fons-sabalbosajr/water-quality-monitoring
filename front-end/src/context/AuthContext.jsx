@@ -29,7 +29,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    encryptedStorage.removeItem(STORAGE_KEY);
+    encryptedStorage.clearAll();
     setUser(null);
   };
 

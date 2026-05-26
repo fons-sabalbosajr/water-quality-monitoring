@@ -24,7 +24,7 @@ const Login = () => {
     try {
       const user = await login(form.email, form.password);
       logActivity('Signed in', { email: form.email }, user);
-      navigate('/');
+      navigate('/dashboard', { replace: true });
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed. Please try again.');
     } finally {

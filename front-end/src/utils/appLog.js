@@ -1,8 +1,10 @@
+import encryptedStorage from './encryptedStorage';
+
 const LOG_KEY = 'wqms_app_logs';
 
 const readLogs = () => {
   try {
-    return JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
+    return encryptedStorage.getItem(LOG_KEY) || [];
   } catch {
     return [];
   }
@@ -11,7 +13,7 @@ const readLogs = () => {
 export const getAppLogs = () => readLogs();
 
 export const clearAppLogs = () => {
-  localStorage.removeItem(LOG_KEY);
+  encryptedStorage.removeItem(LOG_KEY);
 };
 
 export const logActivity = (action, details = {}, user = null) => {
@@ -24,7 +26,7 @@ export const logActivity = (action, details = {}, user = null) => {
     details,
   };
   const next = [entry, ...readLogs()].slice(0, 500);
-  localStorage.setItem(LOG_KEY, JSON.stringify(next));
+  encryptedStorage.setItem(LOG_KEY, next);
   window.dispatchEvent(new CustomEvent('wqms:log', { detail: entry }));
   return entry;
 };

@@ -81,11 +81,11 @@ export const resetStoredWqmSheets = () => {
   window.dispatchEvent(new CustomEvent(WQM_DRAFTS_EVENT));
 };
 
-export const getLocalPublishedWqmYear = () => normalizeWqmYear(localStorage.getItem(WQM_PUBLISHED_YEAR_KEY));
+export const getLocalPublishedWqmYear = () => normalizeWqmYear(encryptedStorage.getItem(WQM_PUBLISHED_YEAR_KEY));
 
 export const publishWqmYear = (nextYear) => {
   const year = normalizeWqmYear(nextYear);
-  localStorage.setItem(WQM_PUBLISHED_YEAR_KEY, String(year));
+  encryptedStorage.setItem(WQM_PUBLISHED_YEAR_KEY, String(year));
   window.dispatchEvent(new CustomEvent(WQM_PUBLISHED_YEAR_EVENT, { detail: year }));
   return year;
 };
@@ -122,7 +122,7 @@ export const usePublishedWqmYear = () => {
       });
 
     const refresh = (event) => {
-      setYear(normalizeWqmYear(event.detail || localStorage.getItem(WQM_PUBLISHED_YEAR_KEY)));
+      setYear(normalizeWqmYear(event.detail || encryptedStorage.getItem(WQM_PUBLISHED_YEAR_KEY)));
     };
     window.addEventListener(WQM_PUBLISHED_YEAR_EVENT, refresh);
     window.addEventListener('storage', refresh);

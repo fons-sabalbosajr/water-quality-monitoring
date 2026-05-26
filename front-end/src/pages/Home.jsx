@@ -13,8 +13,8 @@ import embLogo from '../assets/emblogo.svg';
 import WQM2026 from './WQM2026';
 import Settings from './Settings';
 import WaterbodyProfile from './WaterbodyProfile';
-import VisualizationView from './Visualizations';
 import { logActivity } from '../utils/appLog';
+import encryptedStorage from '../utils/encryptedStorage';
 import {
   IcoDashboard, IcoTable, IcoWater, IcoSettings,
   IcoChevronDown, IcoChevronRight, IcoCalendar,
@@ -32,6 +32,8 @@ import {
 import './Home.css';
 
 const Waterbody3DMap = lazy(() => import('./Waterbody3DMap'));
+const VisualizationView = lazy(() => import('./Visualizations'));
+const CesiumStationMap = lazy(() => import('../components/CesiumStationMap'));
 
 /* ── Constants ── */
 const CHART_PARAMS = PARAM_ORDER;
@@ -70,18 +72,6 @@ const isWaterbodyMatch = (location, matches) => {
   if (!river && loc && [...matches].some((match) => match.includes(loc) || loc.includes(match))) return true;
   return false;
 };
-
-const MAP_TILE_SIZE = 256;
-const MAP_VIEW = { width: 720, height: 360 };
-const MAP_LAYERS = {
-  standard: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-  humanitarian: 'https://tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-};
-
-const MAP_LAYER_OPTIONS = [
-  ['standard', 'Standard'],
-  ['humanitarian', 'Humanitarian'],
-];
 
 const buildStationTrendData = (stationSeries, param) => MONTHS_SHORT.map((label, monthIndex) => {
   const point = { label };
@@ -195,73 +185,6 @@ const getCorrelationInterpretation = (matrix) => {
   return parts.join(' ');
 };
 
-const projectMapPoint = (lat, lng, zoom) => {
-  const safeLat = Math.max(Math.min(lat, 85.05112878), -85.05112878);
-  const scale = MAP_TILE_SIZE * (2 ** zoom);
-  const sinLat = Math.sin((safeLat * Math.PI) / 180);
-  return {
-    x: ((lng + 180) / 360) * scale,
-    y: (0.5 - (Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI))) * scale,
-  };
-};
-
-const getMapZoom = (bounds) => {
-  const northWest = projectMapPoint(bounds.maxLat, bounds.minLng, 0);
-  const southEast = projectMapPoint(bounds.minLat, bounds.maxLng, 0);
-  const worldWidth = Math.max(Math.abs(southEast.x - northWest.x), 0.0001);
-  const worldHeight = Math.max(Math.abs(southEast.y - northWest.y), 0.0001);
-  const zoomX = Math.floor(Math.log2((MAP_VIEW.width * 0.82) / worldWidth));
-  const zoomY = Math.floor(Math.log2((MAP_VIEW.height * 0.72) / worldHeight));
-  return Math.max(8, Math.min(15, Math.min(zoomX, zoomY)));
-};
-
-const buildTileMap = (bounds, locations, zoomDelta = 0, layer = 'standard', pan = { x: 0, y: 0 }) => {
-  if (!bounds || !locations.length) return null;
-  const zoom = Math.max(8, Math.min(17, getMapZoom(bounds) + zoomDelta));
-  const centerLat = (bounds.minLat + bounds.maxLat) / 2;
-  const centerLng = (bounds.minLng + bounds.maxLng) / 2;
-  const center = projectMapPoint(centerLat, centerLng, zoom);
-  const origin = {
-    x: center.x - (MAP_VIEW.width / 2) - pan.x,
-    y: center.y - (MAP_VIEW.height / 2) - pan.y,
-  };
-  const startX = Math.floor(origin.x / MAP_TILE_SIZE);
-  const endX = Math.floor((origin.x + MAP_VIEW.width) / MAP_TILE_SIZE);
-  const startY = Math.floor(origin.y / MAP_TILE_SIZE);
-  const endY = Math.floor((origin.y + MAP_VIEW.height) / MAP_TILE_SIZE);
-  const maxTile = 2 ** zoom;
-  const tiles = [];
-
-  for (let x = startX; x <= endX; x += 1) {
-    for (let y = startY; y <= endY; y += 1) {
-      if (y >= 0 && y < maxTile) {
-        const wrappedX = ((x % maxTile) + maxTile) % maxTile;
-        tiles.push({
-          key: `${zoom}-${wrappedX}-${y}`,
-          url: (MAP_LAYERS[layer] || MAP_LAYERS.standard)
-            .replace('{z}', zoom)
-            .replace('{x}', wrappedX)
-            .replace('{y}', y),
-          left: (x * MAP_TILE_SIZE) - origin.x,
-          top: (y * MAP_TILE_SIZE) - origin.y,
-        });
-      }
-    }
-  }
-
-  const pins = locations.map((point, index) => {
-    const projected = projectMapPoint(point.lat, point.lng, zoom);
-    return {
-      ...point,
-      color: CHART_COLORS[index % CHART_COLORS.length],
-      left: projected.x - origin.x,
-      top: projected.y - origin.y,
-    };
-  });
-
-  return { tiles, pins, zoom };
-};
-
 const getObservationMeta = (value) => {
   const text = String(value || '').toLowerCase();
   if (/dead|kill|oil|grease|sewage|garbage|trash|foul|odor|black|foam/.test(text)) {
@@ -313,15 +236,8 @@ const DashboardView = () => {
   const [chartParam, setChartParam] = useState(CHART_PARAMS[0]);
   const [selectedObservationMonth, setSelectedObservationMonth] = useState('');
   const [mapStationFilter, setMapStationFilter] = useState('all');
-  const [mapZoomDelta, setMapZoomDelta] = useState(0);
-  const [mapLayer, setMapLayer] = useState('standard');
-  const [mapShowLabels, setMapShowLabels] = useState(true);
-  const [selectedMapPin, setSelectedMapPin] = useState(null);
-  const [mapPan, setMapPan] = useState({ x: 0, y: 0 });
-  const [isMapDragging, setIsMapDragging] = useState(false);
   const [stationLocations, setStationLocations] = useState([]);
   const { theme } = useTheme();
-  const mapDragRef = useRef(null);
   const activeWaterbodyKey = WATERBODIES.some((waterbody) => waterbody.key === selectedWaterbody)
     ? selectedWaterbody
     : (WATERBODIES[0]?.key || '');
@@ -460,51 +376,10 @@ const DashboardView = () => {
     return selectedLocations.filter((location) => String(location.id) === activeMapStationFilter);
   }, [activeMapStationFilter, selectedLocations]);
 
-  const mapBounds = useMemo(() => {
-    if (!filteredMapLocations.length) return null;
-    const lats = filteredMapLocations.map((point) => point.lat);
-    const lngs = filteredMapLocations.map((point) => point.lng);
-    const minLat = Math.min(...lats);
-    const maxLat = Math.max(...lats);
-    const minLng = Math.min(...lngs);
-    const maxLng = Math.max(...lngs);
-    const latPad = Math.max((maxLat - minLat) * 0.22, 0.025);
-    const lngPad = Math.max((maxLng - minLng) * 0.22, 0.025);
-    return {
-      minLat: minLat - latPad,
-      maxLat: maxLat + latPad,
-      minLng: minLng - lngPad,
-      maxLng: maxLng + lngPad,
-    };
-  }, [filteredMapLocations]);
-
-  const tileMap = useMemo(() => buildTileMap(mapBounds, filteredMapLocations, mapZoomDelta, mapLayer, mapPan), [filteredMapLocations, mapBounds, mapLayer, mapPan, mapZoomDelta]);
-  const activeMapPin = useMemo(() => {
-    if (!selectedMapPin || !tileMap) return selectedMapPin;
-    return tileMap.pins.find((point) => (
-      String(point.id) === String(selectedMapPin.id)
-      && point.lat === selectedMapPin.lat
-      && point.lng === selectedMapPin.lng
-    )) || selectedMapPin;
-  }, [selectedMapPin, tileMap]);
-
-  const mapCenter = activeMapPin || filteredMapLocations[0];
+  const mapCenter = filteredMapLocations[0];
   const mapLink = mapCenter
     ? `https://www.openstreetmap.org/?mlat=${mapCenter.lat}&mlon=${mapCenter.lng}#map=13/${mapCenter.lat}/${mapCenter.lng}`
     : 'https://www.openstreetmap.org/';
-
-  useEffect(() => {
-    const endMapDrag = () => {
-      mapDragRef.current = null;
-      setIsMapDragging(false);
-    };
-    window.addEventListener('pointerup', endMapDrag);
-    window.addEventListener('pointercancel', endMapDrag);
-    return () => {
-      window.removeEventListener('pointerup', endMapDrag);
-      window.removeEventListener('pointercancel', endMapDrag);
-    };
-  }, []);
 
   if (loading) {
     return (
@@ -535,9 +410,6 @@ const DashboardView = () => {
             onChange={(event) => {
               setSelectedWaterbody(event.target.value);
               setMapStationFilter('all');
-              setMapZoomDelta(0);
-              setMapPan({ x: 0, y: 0 });
-              setSelectedMapPin(null);
             }}
           >
             {groupedWaterbodies.map((group) => (
@@ -572,7 +444,7 @@ const DashboardView = () => {
         <div className="chart-card-header">
           <div>
             <h3 className="chart-title">Parameter Summary — Monthly Station Trends</h3>
-            <p className="chart-sub">{activeParam}{activeUnit ? ` (${activeUnit})` : ''} readings per monitoring station · {selectedInfo?.name}</p>
+            <p className="chart-sub">{activeParam}{activeUnit ? ` ${activeUnit}` : ''} readings per monitoring station · {selectedInfo?.name}</p>
           </div>
         </div>
         <div className="chart-wrap">
@@ -646,11 +518,7 @@ const DashboardView = () => {
             <span>Station</span>
             <select
               value={activeMapStationFilter}
-              onChange={(event) => {
-                const nextId = event.target.value;
-                setMapStationFilter(nextId);
-                setSelectedMapPin(nextId === 'all' ? null : selectedLocations.find((location) => String(location.id) === nextId) || null);
-              }}
+              onChange={(event) => setMapStationFilter(event.target.value)}
             >
               <option value="all">All mapped stations</option>
               {selectedLocations.map((location) => (
@@ -661,112 +529,23 @@ const DashboardView = () => {
             </select>
           </label>
           <div className="map-tool-actions" aria-label="Map tools">
-            <button type="button" onClick={() => setMapZoomDelta((zoom) => Math.max(zoom - 1, -2))}>-</button>
-            <span>{tileMap ? `Z${tileMap.zoom}` : 'Z-'}</span>
-            <button type="button" onClick={() => setMapZoomDelta((zoom) => Math.min(zoom + 1, 3))}>+</button>
-            <button type="button" className={mapShowLabels ? 'active' : ''} onClick={() => setMapShowLabels((show) => !show)}>Labels</button>
-            <button type="button" onClick={() => { setMapStationFilter('all'); setMapZoomDelta(0); setMapPan({ x: 0, y: 0 }); setSelectedMapPin(null); }}>Reset</button>
+            <button type="button" onClick={() => setMapStationFilter('all')}>Reset</button>
           </div>
         </div>
-        {tileMap ? (
-          <div
-            className={`osm-map-wrap${isMapDragging ? ' dragging' : ''}`}
-            onPointerDown={(event) => {
-              if (event.button !== 0 || event.target.closest('.map-pin, .map-layer-control, .map-station-card')) return;
-              event.currentTarget.setPointerCapture?.(event.pointerId);
-              mapDragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, pan: mapPan };
-              setIsMapDragging(true);
-            }}
-            onPointerMove={(event) => {
-              if (!mapDragRef.current || mapDragRef.current.pointerId !== event.pointerId) return;
-              const dx = event.clientX - mapDragRef.current.x;
-              const dy = event.clientY - mapDragRef.current.y;
-              setMapPan({ x: mapDragRef.current.pan.x + dx, y: mapDragRef.current.pan.y + dy });
-            }}
-            onPointerUp={(event) => {
-              event.currentTarget.releasePointerCapture?.(event.pointerId);
-              mapDragRef.current = null;
-              setIsMapDragging(false);
-            }}
-            onPointerCancel={() => {
-              mapDragRef.current = null;
-              setIsMapDragging(false);
-            }}
-            onWheel={(event) => {
-              event.preventDefault();
-              setMapZoomDelta((zoom) => Math.max(-2, Math.min(3, zoom + (event.deltaY < 0 ? 1 : -1))));
-            }}
-          >
-            <div className="osm-map" role="img" aria-label={`${selectedInfo?.name} plotted station map`}>
-              {tileMap.tiles.map((tile) => (
-                <img
-                  key={tile.key}
-                  className="osm-tile"
-                  src={tile.url}
-                  alt=""
-                  style={{ left: tile.left, top: tile.top }}
-                  loading="lazy"
-                />
-              ))}
-            </div>
-            <div className="map-layer-control" aria-label="Map layers">
-              {MAP_LAYER_OPTIONS.map(([layerKey, label]) => (
-                <button
-                  type="button"
-                  key={layerKey}
-                  className={mapLayer === layerKey ? 'active' : ''}
-                  onClick={() => setMapLayer(layerKey)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="map-pin-layer">
-              {tileMap.pins.map((point) => (
-                <button
-                  type="button"
-                  key={`${point.id}-${point.lat}-${point.lng}`}
-                  className={`map-pin${selectedMapPin?.id === point.id ? ' active' : ''}${mapShowLabels ? '' : ' labels-hidden'}`}
-                  style={{ left: `${point.left}px`, top: `${point.top}px`, '--pin-color': point.color }}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setSelectedMapPin(point);
-                  }}
-                  title={`${point.station || point.id} station details`}
-                >
-                  <b aria-hidden="true" />
-                  <small>{point.station || point.barangay || 'Station'}</small>
-                </button>
-              ))}
-            </div>
-            {activeMapPin && (
-              <div
-                className="map-station-card"
-                style={{
-                  left: `${Math.min(Math.max(activeMapPin.left + 14, 12), MAP_VIEW.width - 238)}px`,
-                  top: `${Math.min(Math.max(activeMapPin.top - 96, 12), MAP_VIEW.height - 128)}px`,
-                }}
-              >
-                <button type="button" className="map-station-close" onClick={() => setSelectedMapPin(null)} aria-label="Close station details">x</button>
-                <span className="map-station-icon"><IcoMapPin size={15} /></span>
-                <div>
-                  <strong>{activeMapPin.station || activeMapPin.barangay || 'Station'}</strong>
-                  <span>{activeMapPin.waterbodyRiver || selectedInfo?.name}</span>
-                  <span>{activeMapPin.barangay}{activeMapPin.province ? `, ${activeMapPin.province}` : ''}</span>
-                  <small>{activeMapPin.lat.toFixed(5)}, {activeMapPin.lng.toFixed(5)}</small>
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="map-empty-state">No mapped station coordinates matched this waterbody.</div>
-        )}
-        {tileMap && (
+        <Suspense fallback={<div className="map-empty-state">Loading 3D station map...</div>}>
+          <CesiumStationMap
+            className="dashboard-cesium-map"
+            locations={filteredMapLocations}
+            waterbodyName={selectedInfo?.name || 'Waterbody'}
+            height={360}
+            emptyMessage="No mapped station coordinates matched this waterbody."
+          />
+        </Suspense>
+        {!!filteredMapLocations.length && (
           <div className="map-legend">
-            {tileMap.pins.map((point) => (
+            {filteredMapLocations.map((point, index) => (
               <span key={`${point.id}-legend`}>
-                <i style={{ background: point.color }} />
+                <i style={{ background: CHART_COLORS[index % CHART_COLORS.length] }} />
                 {point.station || point.barangay || 'Station'}
               </span>
             ))}
@@ -900,7 +679,6 @@ const DashboardView = () => {
 const VISUALIZATION_ITEMS = [
   ['heatmap', 'Heatmap Matrix', IcoTable],
   ['fecal-trophic', 'Fecal Risk & Trophic State', IcoMapPin],
-  ['map-3d', '3D Waterbody Map', IcoMapPin],
   ['seasonal', 'Seasonal Decomposition', IcoCalendar],
   ['radar', 'Radar Chart', IcoDashboard],
   ['scatter', 'Scatter Analysis', IcoWaves],
@@ -918,7 +696,7 @@ const DEFAULT_ACCESS_SETTINGS = {
 
 const getStoredAccessSettings = () => {
   try {
-    return { ...DEFAULT_ACCESS_SETTINGS, ...JSON.parse(localStorage.getItem('wqms_access_settings') || '{}') };
+    return { ...DEFAULT_ACCESS_SETTINGS, ...(encryptedStorage.getItem('wqms_access_settings') || {}) };
   } catch {
     return DEFAULT_ACCESS_SETTINGS;
   }
@@ -1048,7 +826,7 @@ const Home = () => {
 
           {canAccess('visualizations') && (
             <button
-              className={`nav-item nav-group-toggle${visualizationsOpen || activeView === 'visualization' ? ' open' : ''}`}
+              className={`nav-item nav-group-toggle${visualizationsOpen || (activeView === 'visualization' && activeVisualization !== 'map-3d') ? ' open' : ''}`}
               onClick={() => setVisualizationsOpen((open) => !open)}
             >
               <IcoDashboard size={15} />
@@ -1075,6 +853,16 @@ const Home = () => {
           )}
 
           <p className="nav-section-label">Monitoring</p>
+
+          {canAccess('waterbodies') && (
+            <button
+              className={`nav-item${activeView === 'visualization' && activeVisualization === 'map-3d' ? ' active' : ''}`}
+              onClick={() => navVisualization('map-3d')}
+            >
+              <IcoMapPin size={15} />
+              <span className="nav-label">3D Waterbody Map</span>
+            </button>
+          )}
 
           {canAccess('waterbodies') && (
             <button
@@ -1245,7 +1033,11 @@ const Home = () => {
                   <Waterbody3DMap />
                 </Suspense>
               )
-              : <VisualizationView type={activeVisualization} />
+              : (
+                <Suspense fallback={<div className="app-loading compact"><span />Loading visual analytics...</div>}>
+                  <VisualizationView type={activeVisualization} />
+                </Suspense>
+              )
           )}
           {activeView === 'developer-manager' && <Settings key={developerSection} initialSection={developerSection} />}
           {activeView === 'waterbody'    && activeWaterbody && (
