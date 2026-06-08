@@ -2,13 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import {
+  Alert, Button, Card, Col, Empty, Row, Space, Statistic, Table, Tag,
+} from 'antd';
+import { LineChartOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
   Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import * as XLSX from 'xlsx';
 import api from '../api/axios';
-import stationWorkbookUrl from '../../docs/wqm_stations.xlsx?url';
 import encryptedStorage from '../utils/encryptedStorage';
+import { loadStationLocations } from '../utils/stationWorkbook';
 import {
   buildWaterbodyOptions,
   getReadableStations,
@@ -59,24 +62,6 @@ const normalizeForMatch = (value) => String(value || '')
 const getLocationStationNumber = (location) => {
   const match = String(location?.id || '').match(/(?:^|_)(\d+)$/);
   return match ? Number(match[1]) : null;
-};
-
-const loadStationLocations = async () => {
-  const response = await fetch(stationWorkbookUrl);
-  const buffer = await response.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: 'array' });
-  const workbookSheet = workbook.Sheets.Station_List || workbook.Sheets[workbook.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(workbookSheet, { defval: '' })
-    .map((row) => ({
-      id: row.ID,
-      station: String(row.Station || '').trim(),
-      waterbodyRiver: String(row.Waterbody || row['Waterbody River'] || row['Waterbody river'] || '').trim(),
-      barangay: String(row.Barangay || '').trim(),
-      province: String(row.Province || '').trim(),
-      lat: Number(row.LAT),
-      lng: Number(row.LONG),
-    }))
-    .filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng));
 };
 
 const matchStationLocation = (station, waterbody, stationLocations) => {
@@ -145,6 +130,21 @@ const getStoredAccessSettings = () => {
     return Object.fromEntries(ACCESS_FEATURES.map(([key, , fallback]) => [key, stored?.[key] || fallback]));
   } catch {
     return Object.fromEntries(ACCESS_FEATURES.map(([key, , fallback]) => [key, fallback]));
+  }
+};
+
+const USER_ACCESS_KEY = 'wqms_user_access';
+const ACCESS_OVERRIDE_OPTIONS = [
+  ['default', 'Role default'],
+  ['allow', 'Allow'],
+  ['deny', 'Deny'],
+];
+
+const getUserAccessOverrides = () => {
+  try {
+    return encryptedStorage.getItem(USER_ACCESS_KEY) || {};
+  } catch {
+    return {};
   }
 };
 
@@ -538,6 +538,7 @@ const AccountsPanel = ({ currentUser }) => {
   const [msg, setMsg] = useState('');
   const [editingUser, setEditingUser] = useState(null);
   const [userDraft, setUserDraft] = useState(null);
+  const [userAccessDraft, setUserAccessDraft] = useState({});
   const userPagination = usePaginatedRows(users, 10);
 
   useEffect(() => {
@@ -582,6 +583,12 @@ const AccountsPanel = ({ currentUser }) => {
     try {
       await api.delete(`/admin/users/${id}`);
       setUsers((prev) => prev.filter((u) => u._id !== id));
+      const overrides = getUserAccessOverrides();
+      if (overrides[id]) {
+        const { [id]: _removed, ...rest } = overrides;
+        encryptedStorage.setItem(USER_ACCESS_KEY, rest);
+        window.dispatchEvent(new CustomEvent('wqms:access-settings', { detail: rest }));
+      }
       setMsg(`User "${name}" deleted.`);
       logActivity('Deleted user account', { user: name }, currentUser);
     } catch (e) {
@@ -596,6 +603,23 @@ const AccountsPanel = ({ currentUser }) => {
       email: user.email || '',
       role: user.role || 'user',
       status: user.status || 'approved',
+    });
+    setUserAccessDraft({ ...(getUserAccessOverrides()[user._id] || {}) });
+  };
+
+  const updateUserAccess = (feature, value) => {
+    if (!editingUser) return;
+    setUserAccessDraft((draft) => {
+      const nextDraft = { ...draft };
+      if (value === 'default') delete nextDraft[feature];
+      else nextDraft[feature] = value;
+      const updated = { ...getUserAccessOverrides() };
+      if (Object.keys(nextDraft).length) updated[editingUser._id] = nextDraft;
+      else delete updated[editingUser._id];
+      encryptedStorage.setItem(USER_ACCESS_KEY, updated);
+      window.dispatchEvent(new CustomEvent('wqms:access-settings', { detail: updated }));
+      logActivity('Updated user access override', { user: editingUser.email, feature, value }, currentUser);
+      return nextDraft;
     });
   };
 
@@ -674,7 +698,7 @@ const AccountsPanel = ({ currentUser }) => {
                       {u.status !== 'rejected' && <button className="mini-action warn" onClick={() => changeStatus(u._id, 'rejected')}>Reject</button>}
                       <button className="mini-action danger" onClick={() => deleteUser(u._id, u.name)}>Delete</button>
                     </div>
-                  ) : <button className="mini-action" onClick={() => openUserModal(u)}>View</button>}
+                  ) : <button className="mini-action" onClick={() => openUserModal(u)}>Manage</button>}
                 </td>
               </tr>
             ))}
@@ -721,6 +745,25 @@ const AccountsPanel = ({ currentUser }) => {
                   {Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </label>
+            </div>
+            <div className="settings-user-access">
+              <div className="settings-user-access-head">
+                <h5>Manage Access Settings</h5>
+                <p>Override role-based access for this account. &quot;Role default&quot; follows the global minimum-role rule.</p>
+              </div>
+              <div className="settings-user-access-grid">
+                {ACCESS_FEATURES.map(([key, label]) => (
+                  <label key={key}>
+                    <span>{label}</span>
+                    <select
+                      value={userAccessDraft[key] || 'default'}
+                      onChange={(event) => updateUserAccess(key, event.target.value)}
+                    >
+                      {ACCESS_OVERRIDE_OPTIONS.map(([value, optionLabel]) => <option key={value} value={value}>{optionLabel}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
             </div>
             <div className="settings-user-modal-actions">
               <button className="settings-btn" type="button" onClick={() => setEditingUser(null)}>Cancel</button>
@@ -982,7 +1025,6 @@ const AiForecastPanel = () => {
   const [status, setStatus] = useState(null);
   const [readings, setReadings] = useState([]);
   const [message, setMessage] = useState('');
-  const readingsPagination = usePaginatedRows(readings, 10);
 
   const refreshStatus = useCallback(() => {
     setMessage('');
@@ -1002,71 +1044,103 @@ const AiForecastPanel = () => {
   }, [refreshStatus]);
 
   const latestReading = readings[0];
+  const localEngines = status?.localEngines || [];
+
+  const readingColumns = [
+    { title: 'Station', dataIndex: 'location', key: 'location' },
+    { title: 'pH', dataIndex: 'ph', key: 'ph' },
+    { title: 'Turbidity', dataIndex: 'turbidity', key: 'turbidity' },
+    { title: 'Temp.', dataIndex: 'temperature', key: 'temperature' },
+    { title: 'DO', dataIndex: 'dissolved_oxygen', key: 'do' },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      render: (value) => (
+        <Tag color={value === 'critical' ? 'red' : value === 'warning' ? 'gold' : 'green'}>
+          {value}
+        </Tag>
+      ),
+    },
+  ];
 
   return (
-    <div className="ai-config-panel">
-      <div className="backup-grid">
-        <article className={`backup-card ai-status-card ${status?.configured ? 'ok' : 'warn'}`}>
-          <span>AI Status</span>
-          <strong>{status?.configured ? 'Ready' : 'Not ready'}</strong>
-        </article>
-        <article className="backup-card">
-          <span>Google AI API Key</span>
-          <strong>{status?.configured ? 'Configured' : 'Not detected'}</strong>
-        </article>
-        <article className="backup-card">
-          <span>Forecast Model</span>
-          <strong>{status?.model || 'Checking...'}</strong>
-        </article>
-      </div>
-      <div className="ai-monitor-grid">
-        <article>
-          <span>Current Monitoring Feed</span>
-          <strong>{readings.length} readings</strong>
-          <small>{latestReading?.date ? new Date(latestReading.date).toLocaleString('en-PH') : 'No timestamp available'}</small>
-        </article>
-        <article>
-          <span>Latest Station</span>
-          <strong>{latestReading?.location || 'No readings'}</strong>
-          <small>{latestReading?.status || 'n/a'}</small>
-        </article>
-      </div>
-      <div className="ai-readings-table-wrap">
-        <table className="ai-readings-table">
-          <thead>
-            <tr>
-              <th>Station</th>
-              <th>pH</th>
-              <th>Turbidity</th>
-              <th>Temp.</th>
-              <th>DO</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {readingsPagination.rows.map((reading) => (
-              <tr key={reading.id}>
-                <td>{reading.location}</td>
-                <td>{reading.ph}</td>
-                <td>{reading.turbidity}</td>
-                <td>{reading.temperature}</td>
-                <td>{reading.dissolved_oxygen}</td>
-                <td><span className={`ai-reading-status ${reading.status}`}>{reading.status}</span></td>
-              </tr>
-            ))}
-            {!readings.length && <tr><td colSpan="6">No current monitoring readings loaded.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-      <TablePagination pagination={readingsPagination} label="AI readings" />
-      <div className="settings-toolbar">
-        <button className="settings-btn primary" onClick={refreshStatus}>Check AI Status</button>
-      </div>
-      <p className="section-note">
-        Recommended model: {status?.recommendedModel || 'gemini-2.5-flash'}. Add GEMINI_API_KEY in server/.env or the project .env, then restart the Node server. Optional: set GEMINI_MODEL to override it.
-      </p>
-      {message && <p className="email-status error">{message}</p>}
-    </div>
+    <Space direction="vertical" size="large" className="ai-config-panel" style={{ width: '100%' }}>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={8}>
+          <Card size="small">
+            <Statistic
+              title="AI Status"
+              value={status?.configured ? 'Ready' : 'Not ready'}
+              valueStyle={{ color: status?.configured ? '#16a34a' : '#d97706' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card size="small">
+            <Statistic title="Google AI API Key" value={status?.configured ? 'Configured' : 'Not detected'} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card size="small">
+            <Statistic title="AI Forecast Model" value={status?.model || 'Checking...'} />
+          </Card>
+        </Col>
+      </Row>
+
+      <Card size="small" title="Local forecast engines" className="ai-engines-card">
+        <Row gutter={[16, 16]}>
+          {localEngines.map((engine) => (
+            <Col xs={24} sm={12} key={engine.id}>
+              <Card size="small" type="inner" title={<Space><LineChartOutlined />{engine.label}</Space>}>
+                <p style={{ margin: 0 }}>{engine.description}</p>
+              </Card>
+            </Col>
+          ))}
+          {!localEngines.length && (
+            <Col span={24}><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No local engines reported." /></Col>
+          )}
+        </Row>
+      </Card>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12}>
+          <Card size="small">
+            <Statistic title="Current Monitoring Feed" value={readings.length} suffix="readings" />
+            <small>{latestReading?.date ? new Date(latestReading.date).toLocaleString('en-PH') : 'No timestamp available'}</small>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12}>
+          <Card size="small">
+            <Statistic title="Latest Station" value={latestReading?.location || 'No readings'} />
+            <small>{latestReading?.status || 'n/a'}</small>
+          </Card>
+        </Col>
+      </Row>
+
+      <Table
+        size="small"
+        rowKey={(row) => row.id}
+        columns={readingColumns}
+        dataSource={readings}
+        pagination={{ pageSize: 10, hideOnSinglePage: true }}
+        locale={{ emptyText: 'No current monitoring readings loaded.' }}
+        scroll={{ x: 'max-content' }}
+      />
+
+      <Space>
+        <Button type="primary" icon={<ReloadOutlined />} onClick={refreshStatus}>Check AI Status</Button>
+      </Space>
+
+      <Alert
+        type="info"
+        showIcon
+        message="Forecast configuration"
+        description={`Recommended AI model: ${status?.recommendedModel || 'gemini-2.5-flash'}. Add GEMINI_API_KEY in server/.env (optional GEMINI_MODEL to override). The Prophet and OLS engines run in-browser on the Forecast Charts page and need no API key.`}
+      />
+
+      {message && <Alert type="error" showIcon message={message} />}
+    </Space>
   );
 };
 
@@ -1087,13 +1161,13 @@ const Settings = ({ initialSection = 'accounts' }) => {
 
   return (
     <div className="settings-page">
-      <div className="settings-header">
+      {/* <div className="settings-header">
         <div>
           <h2 className="settings-title">Developer Manager</h2>
           <p className="settings-sub">Accounts, approvals, runtime health, logs, and backup controls.</p>
         </div>
         <span className="admin-badge">{user?.role === 'developer' ? 'Developer' : 'Admin'}</span>
-      </div>
+      </div> */}
 
       <div className="settings-layout settings-layout-single">
         <div className="settings-content">

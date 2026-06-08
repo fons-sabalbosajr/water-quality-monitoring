@@ -655,6 +655,51 @@
   margin-top: 1rem;
 }
 
+.settings-user-access {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+}
+
+.settings-user-access-head h5 {
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  margin: 0 0 0.2rem;
+}
+
+.settings-user-access-head p {
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  margin: 0 0 0.7rem;
+}
+
+.settings-user-access-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem 0.75rem;
+}
+
+.settings-user-access-grid label {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.settings-user-access-grid span {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.settings-user-access-grid select {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  padding: 0.5rem 0.6rem;
+}
+
 .settings-pagination {
   display: flex;
   align-items: center;

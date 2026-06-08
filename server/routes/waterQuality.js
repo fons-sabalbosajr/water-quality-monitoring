@@ -46,7 +46,7 @@ const mockReadings = [
 
 const importWqmYear = async (year) => {
   const sourceFile = path.resolve(__dirname, '..', '..', 'front-end', 'docs', `wqm${year}.xlsx`);
-  const sheets = parseWorkbook(sourceFile, year);
+  const sheets = await parseWorkbook(sourceFile, year);
   if (!sheets.length) throw new Error(`No WQM sheets parsed for ${year}.`);
   return WqmDataset.findOneAndUpdate(
     { year },
@@ -127,6 +127,10 @@ router.get('/forecast/status', protect, (req, res) => {
     configured: Boolean(getGeminiKey()),
     model: getGeminiModel(),
     recommendedModel: DEFAULT_FORECAST_MODEL,
+    localEngines: [
+      { id: 'prophet', label: 'Prophet (additive)', description: 'Linear trend + Fourier seasonality + widening uncertainty interval. Runs in-browser, no API key required.' },
+      { id: 'ols', label: 'Fast trend (OLS)', description: 'Ordinary least squares trend with RMSE uncertainty band. Fast in-browser screening.' },
+    ],
   });
 });
 

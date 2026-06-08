@@ -179,8 +179,6 @@
 
 .cesium-elevation-badge {
   position: absolute;
-  left: calc(0.75rem + min(292px, calc(100% - 10rem)) + 0.6rem);
-  right: auto;
   top: 0.75rem;
   z-index: 5;
   display: grid;
@@ -192,6 +190,19 @@
   color: #e2e8f0;
   padding: 0.45rem 0.6rem;
   backdrop-filter: blur(12px);
+  transition: left 0.2s ease, right 0.2s ease, top 0.2s ease;
+}
+
+/* Sits directly beside the collapsed Layer Tools pill. */
+.cesium-elevation-badge.tools-collapsed {
+  left: calc(0.75rem + 150px);
+  right: auto;
+}
+
+/* Moves to the opposite corner so it clears the expanded Layer Tools card. */
+.cesium-elevation-badge.tools-open {
+  left: auto;
+  right: 0.75rem;
 }
 
 .cesium-elevation-badge span {

@@ -8,6 +8,7 @@ import 'antd/dist/reset.css';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/axios';
 import { logActivity } from '../utils/appLog';
+import encryptedStorage from '../utils/encryptedStorage';
 import {
   MONTHS_SHORT, fmt, getAvailableParams, getParamData,
   getParamUnit, normalizeParamName, OBSERVATION_PARAM, toNumber,
@@ -22,6 +23,29 @@ const { Sider, Content } = Layout;
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const normalizeMonthly = (monthly = []) => Array.from({ length: 12 }, (_, index) => monthly[index] ?? null);
+const getYearDraftKey = (year) => `wqm_${year}_drafts`;
+
+const getStoredSheetsForYear = (year, fallback = INITIAL_SHEETS) => (
+  year === 2026
+    ? getStoredWqmSheets()
+    : (encryptedStorage.getItem(getYearDraftKey(year)) || clone(fallback))
+);
+
+const saveStoredSheetsForYear = (year, sheets) => {
+  if (year === 2026) {
+    saveStoredWqmSheets(sheets);
+    return;
+  }
+  encryptedStorage.setItem(getYearDraftKey(year), sheets);
+};
+
+const resetStoredSheetsForYear = (year) => {
+  if (year === 2026) {
+    resetStoredWqmSheets();
+    return;
+  }
+  encryptedStorage.removeItem(getYearDraftKey(year));
+};
 
 const computeAnnualAverage = (monthly = []) => {
   const values = normalizeMonthly(monthly).map(toNumber).filter((value) => value !== null);
@@ -60,7 +84,10 @@ const buildStationDraft = (station, params) => ({
 const WQM2026 = ({ year = 2026 }) => {
   const { user } = useAuth();
   const canManageData = ['admin', 'developer'].includes(user?.role);
-  const [sheets, setSheets] = useState(() => (year === 2026 ? getStoredWqmSheets() : []));
+  const canEditYear = year === 2026 ? canManageData : user?.role === 'admin';
+  const hasStoredSheetsForYear = (year) => Boolean(encryptedStorage.getItem(getYearDraftKey(year)));
+  const [sheets, setSheets] = useState(() => (year === 2026 ? getStoredSheetsForYear(year) : []));
+  const [sourceSheets, setSourceSheets] = useState(() => (year === 2026 ? clone(INITIAL_SHEETS) : []));
   const [loading, setLoading] = useState(year !== 2026);
   const [activeTab, setActiveTab] = useState('');
   const [search, setSearch] = useState('');
@@ -77,12 +104,15 @@ const WQM2026 = ({ year = 2026 }) => {
         setMessage('');
       }
     });
+    const hasDraft = hasStoredSheetsForYear(year);
 
     if (year === 2026) {
-      const localSheets = getStoredWqmSheets();
+      const localSheets = getStoredSheetsForYear(year, INITIAL_SHEETS);
       queueMicrotask(() => {
         if (!cancelled) {
+          setMessage(hasDraft ? `WQM ${year} loaded from encrypted local draft.` : `WQM ${year} loaded from the bundled source dataset.`);
           setLoading(false);
+          setSourceSheets(clone(INITIAL_SHEETS));
           setSheets(localSheets);
           setActiveTab(localSheets[0]?.key || '');
         }
@@ -101,9 +131,12 @@ const WQM2026 = ({ year = 2026 }) => {
       .then((response) => {
         if (cancelled) return;
         const loadedSheets = response.data?.sheets || [];
-        setSheets(loadedSheets);
-        setActiveTab(loadedSheets[0]?.key || '');
-        setMessage(`WQM ${year} loaded from MongoDB.`);
+        const nextHasDraft = hasStoredSheetsForYear(year);
+        const draftSheets = getStoredSheetsForYear(year, loadedSheets);
+        setSourceSheets(clone(loadedSheets));
+        setSheets(draftSheets);
+        setActiveTab(draftSheets[0]?.key || '');
+        setMessage(nextHasDraft ? `WQM ${year} loaded from encrypted local draft.` : `WQM ${year} loaded from MongoDB.`);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -120,8 +153,7 @@ const WQM2026 = ({ year = 2026 }) => {
   const params = useMemo(() => (sheet ? getAvailableParams(sheet.stations, false) : []), [sheet]);
   const modalParams = useMemo(() => (sheet ? getAvailableParams(sheet.stations, true) : []), [sheet]);
   const periodLabels = sheet?.periodLabels?.length ? sheet.periodLabels : MONTHS_SHORT;
-  const isEditableYear = year === 2026;
-  const isReadOnlyModal = modalMode === 'view' || !canManageData || !isEditableYear;
+  const isReadOnlyModal = modalMode === 'view' || !canEditYear;
 
   const stationRows = useMemo(() => {
     if (!sheet) return [];
@@ -156,7 +188,7 @@ const WQM2026 = ({ year = 2026 }) => {
   const updateSheets = (updater, successMessage, logDetails) => {
     setSheets((current) => {
       const next = updater(clone(current));
-      saveStoredWqmSheets(next);
+      saveStoredSheetsForYear(year, next);
       return next;
     });
     if (successMessage) setMessage(successMessage);
@@ -189,7 +221,7 @@ const WQM2026 = ({ year = 2026 }) => {
   };
 
   const saveStation = () => {
-    if (!sheet || !stationDraft || !canManageData || year !== 2026) return;
+    if (!sheet || !stationDraft || !canEditYear) return;
     const normalizedStation = {
       stnNo: parseEditableValue(stationDraft.stnNo),
       stnId: String(stationDraft.stnId || '').trim(),
@@ -221,7 +253,7 @@ const WQM2026 = ({ year = 2026 }) => {
   };
 
   const addStation = () => {
-    if (!sheet || !canManageData || year !== 2026) return;
+    if (!sheet || !canEditYear) return;
     const numericNos = sheet.stations.map((station) => Number(station.stnNo)).filter(Number.isFinite);
     const nextNo = (numericNos.length ? Math.max(...numericNos) : 0) + 1;
     openStationModal('add', {
@@ -233,7 +265,7 @@ const WQM2026 = ({ year = 2026 }) => {
   };
 
   const deleteStation = (station) => {
-    if (!sheet || !canManageData || year !== 2026) return;
+    if (!sheet || !canEditYear) return;
     updateSheets((draft) => draft.map((item) => (
       item.key === sheet.key
         ? { ...item, stations: item.stations.filter((entry) => entry.stnNo !== station.stnNo) }
@@ -245,13 +277,13 @@ const WQM2026 = ({ year = 2026 }) => {
   };
 
   const resetDrafts = () => {
-    if (!canManageData || year !== 2026) return;
-    resetStoredWqmSheets();
-    setSheets(INITIAL_SHEETS);
-    setActiveTab(INITIAL_SHEETS[0]?.key || '');
+    if (!canEditYear) return;
+    resetStoredSheetsForYear(year);
+    setSheets(clone(sourceSheets));
+    setActiveTab(sourceSheets[0]?.key || '');
     setSearch('');
-    setMessage('Encrypted local draft reset to source dataset.');
-    logActivity('Reset tabular draft data', { scope: 'WQM 2026' }, user);
+    setMessage(`Encrypted local ${year} draft reset to source dataset.`);
+    logActivity('Reset tabular draft data', { scope: `WQM ${year}` }, user);
   };
 
   const exportCSV = () => {
@@ -322,7 +354,7 @@ const WQM2026 = ({ year = 2026 }) => {
       render: (_, row) => (
         <Space size={6} wrap>
           <Button size="small" icon={<EyeOutlined />} title="View station details" aria-label="View station details" onClick={() => openStationModal('view', row.station)} />
-          {canManageData && isEditableYear && (
+          {canEditYear && (
             <>
               <Button size="small" type="primary" icon={<EditOutlined />} title="Edit station" aria-label="Edit station" onClick={() => openStationModal('edit', row.station)} />
               <Popconfirm
@@ -375,6 +407,7 @@ const WQM2026 = ({ year = 2026 }) => {
           <Input.TextArea
             className="parameter-observation-input"
             autoSize={{ minRows: 2, maxRows: 5 }}
+            wrap="soft"
             value={value}
             disabled={isReadOnlyModal}
             onChange={(event) => setDraftParam(row.param, 'monthly', event.target.value, monthIndex)}
@@ -453,7 +486,7 @@ const WQM2026 = ({ year = 2026 }) => {
                 {classLabel && <Tag color="blue">Class {classLabel}</Tag>}
                 <Tag color="green">{sheet.stations.length} stations</Tag>
                 <Tag color="default">{params.length} parameters</Tag>
-                {canManageData && year === 2026 ? <Tag color="gold">{user?.role === 'developer' ? 'Developer CRUD' : 'Admin CRUD'}</Tag> : <Tag>Read only</Tag>}
+                {canEditYear ? <Tag color="gold">{year === 2026 ? (user?.role === 'developer' ? 'Developer CRUD' : 'Admin CRUD') : 'Admin Draft Editing'}</Tag> : <Tag>Read only</Tag>}
               </Space>
             </div>
             <Space>
@@ -466,12 +499,12 @@ const WQM2026 = ({ year = 2026 }) => {
                 onChange={(event) => setSearch(event.target.value)}
               />
               <Button icon={<DownloadOutlined />} onClick={exportCSV}>Export CSV</Button>
-              {canManageData && year === 2026 && (
+              {canEditYear && (
                 <>
                   <Button type="primary" icon={<PlusOutlined />} onClick={addStation}>Add Station</Button>
                   <Popconfirm
                     title="Reset encrypted local draft?"
-                    description="This restores the bundled 2026 source data."
+                    description={`This restores the original WQM ${year} source data.`}
                     okText="Reset"
                     cancelText="Cancel"
                     onConfirm={resetDrafts}
@@ -485,7 +518,9 @@ const WQM2026 = ({ year = 2026 }) => {
 
           {(message || !canManageData) && (
             <div className="wqm-ant-note">
-              {message || 'Read-only mode. CRUD controls are restricted to administrators and developers.'}
+              {message || (year === 2026
+                ? 'Read-only mode. CRUD controls are restricted to administrators and developers.'
+                : 'Read-only mode. Only administrators can edit WQM 2024 and WQM 2025 local drafts.')}
             </div>
           )}
 

@@ -746,6 +746,12 @@
   text-transform: uppercase;
 }
 
+.station-modal-grid .ant-input,
+.station-modal-grid .ant-input-disabled {
+  font-size: 0.94rem;
+  font-weight: 700;
+}
+
 .parameter-editor-wrap {
   max-height: 68vh;
   overflow: auto;
@@ -793,17 +799,21 @@
   min-width: 58px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  font-size: 0.68rem;
+  font-size: 0.86rem;
+  font-weight: 700;
 }
 
 .parameter-editor-ant-table .parameter-observation-input,
 .parameter-editor-ant-table .parameter-observation-input.ant-input-disabled {
   min-width: 150px;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: break-word;
   text-align: left;
   line-height: 1.35;
   resize: vertical;
+  font-size: 0.86rem;
+  font-weight: 600;
 }
 
 [data-theme='dark'] .parameter-editor-ant-table .ant-table,
@@ -902,6 +912,7 @@
   color: var(--text-primary);
   font-weight: 700;
   line-height: 1.2;
+  font-size: 0.9rem;
 }
 
 .wqm-param-text small {

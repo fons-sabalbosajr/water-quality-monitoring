@@ -1,17 +1,16 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Select, Space, Statistic, Tag } from 'antd';
 import { LineChartOutlined } from '@ant-design/icons';
-import * as XLSX from 'xlsx';
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Legend,
   Line, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart,
   ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import stationWorkbookUrl from '../../docs/wqm_stations.xlsx?url';
 import {
   MONTHS_SHORT, PARAM_LIMITS, fmt, getAvailableParams,
   getLatestNumber, getMonthlyNumber, getParamData,
 } from '../utils/wqmData';
+import { loadStationLocations } from '../utils/stationWorkbook';
 import { buildWaterbodyOptions, getReadableStations, usePublishedWqmDataset } from '../utils/wqmSheets';
 import './Visualizations.css';
 
@@ -162,6 +161,106 @@ const buildTechnicalForecast = (observed) => {
   };
 };
 
+// Least-squares fit of a single Fourier harmonic (a*cos + b*sin) used to model
+// the seasonal component of the Prophet-style additive decomposition.
+const fitFourierSeasonal = (residuals, period) => {
+  if (residuals.length < 4 || !period) return { a: 0, b: 0 };
+  const w = (2 * Math.PI) / period;
+  let scc = 0;
+  let sss = 0;
+  let scs = 0;
+  let rc = 0;
+  let rs = 0;
+  residuals.forEach((residual, t) => {
+    const c = Math.cos(w * t);
+    const s = Math.sin(w * t);
+    scc += c * c;
+    sss += s * s;
+    scs += c * s;
+    rc += residual * c;
+    rs += residual * s;
+  });
+  const det = (scc * sss) - (scs * scs);
+  if (Math.abs(det) < 1e-9) return { a: 0, b: 0 };
+  return {
+    a: ((rc * sss) - (rs * scs)) / det,
+    b: ((rs * scc) - (rc * scs)) / det,
+  };
+};
+
+// Prophet-style additive forecast: decomposes the series into a linear growth
+// (trend) component plus a Fourier seasonal component, then projects both
+// forward with an uncertainty interval that widens with the horizon — mirroring
+// the behaviour of Facebook/Meta Prophet for short monthly series.
+const buildProphetForecast = (observed) => {
+  if (observed.length < 3) return buildTechnicalForecast(observed);
+
+  const indexed = observed.map((point, index) => ({ x: index, y: point.actual }));
+  const latest = observed.at(-1)?.actual ?? null;
+  const xMean = average(indexed.map((point) => point.x));
+  const yMean = average(indexed.map((point) => point.y));
+  const denominator = indexed.reduce((sum, point) => sum + ((point.x - xMean) ** 2), 0);
+  const slope = denominator
+    ? indexed.reduce((sum, point) => sum + ((point.x - xMean) * (point.y - yMean)), 0) / denominator
+    : 0;
+  const intercept = yMean - (slope * xMean);
+  const trendAt = (x) => (slope * x) + intercept;
+
+  const detrended = indexed.map((point) => point.y - trendAt(point.x));
+  const period = Math.min(12, Math.max(4, indexed.length));
+  const omega = (2 * Math.PI) / period;
+  const { a, b } = fitFourierSeasonal(detrended, period);
+  const seasonalAt = (x) => (a * Math.cos(omega * x)) + (b * Math.sin(omega * x));
+
+  const fitResiduals = indexed.map((point) => point.y - (trendAt(point.x) + seasonalAt(point.x)));
+  const rmse = Math.sqrt(average(fitResiduals.map((value) => value ** 2)) || 0);
+  const seasonalAmplitude = Math.sqrt((a * a) + (b * b));
+  const signalScale = Math.max(Math.abs(latest || 0), 1);
+  const seasonalStrength = Math.round(Math.min(100, (seasonalAmplitude / signalScale) * 100));
+  const confidence = Math.max(48, Math.min(96, 95 - ((rmse / signalScale) * 100)));
+  const trend = Math.abs(slope) < 0.01 ? 'stable' : slope > 0 ? 'increasing' : 'decreasing';
+
+  const points = Array.from({ length: 3 }, (_, index) => {
+    const x = indexed.length + index;
+    const forecast = Number((trendAt(x) + seasonalAt(x)).toFixed(4));
+    const band = (rmse * (1.28 + (index * 0.25))) + (seasonalAmplitude * 0.25);
+    return {
+      month: `F${index + 1}`,
+      forecast,
+      lower: Number((forecast - band).toFixed(4)),
+      upper: Number((forecast + band).toFixed(4)),
+      confidence: Math.round(Math.max(35, confidence - (index * 5))),
+      method: 'Prophet additive (trend + seasonality)',
+    };
+  });
+
+  return {
+    points,
+    diagnostics: {
+      method: 'Prophet-style additive: linear trend + Fourier seasonality + widening interval',
+      latest,
+      slope,
+      rmse,
+      seasonalStrength,
+      confidence: Math.round(confidence),
+      trend,
+    },
+  };
+};
+
+const FORECAST_ENGINES = {
+  ols: {
+    label: 'Fast trend (OLS)',
+    tag: 'Fast trend forecast',
+    build: buildTechnicalForecast,
+  },
+  prophet: {
+    label: 'Prophet (additive)',
+    tag: 'Prophet additive forecast',
+    build: buildProphetForecast,
+  },
+};
+
 const getValueRange = (values) => {
   const valid = values.filter((value) => Number.isFinite(value));
   if (!valid.length) return null;
@@ -179,25 +278,6 @@ const chartDefinitions = {
   forecast: 'Short horizon projection from the latest available monthly trend. Charts are computed in-browser for fast station screening.',
 };
 
-const loadLocations = async () => {
-  const response = await fetch(stationWorkbookUrl);
-  const buffer = await response.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: 'array' });
-  const workbookSheet = workbook.Sheets.Station_List || workbook.Sheets[workbook.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(workbookSheet, { defval: '' })
-    .map((row) => ({
-      id: row.ID,
-      station: String(row.Station || '').trim(),
-      waterbodyLoc: String(row['Waterbody Loc'] || '').trim(),
-      waterbodyRiver: String(row.Waterbody || row['Waterbody River'] || row['Waterbody river'] || '').trim(),
-      barangay: String(row.Barangay || '').trim(),
-      province: String(row.Province || '').trim(),
-      lat: Number(row.LAT),
-      lng: Number(row.LONG),
-    }))
-    .filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng));
-};
-
 const VisualizationView = ({ type }) => {
   const { year: visualizationYear, sheets, loading, error } = usePublishedWqmDataset();
   const WATERBODIES = useMemo(() => buildWaterbodyOptions(sheets), [sheets]);
@@ -212,6 +292,7 @@ const VisualizationView = ({ type }) => {
   const params = useMemo(() => getAvailableParams(stations, false), [stations]);
   const [forecastStationKey, setForecastStationKey] = useState('');
   const [forecastExpandedKey, setForecastExpandedKey] = useState('');
+  const [forecastEngine, setForecastEngine] = useState('prophet');
   const currentMonthIndex = useMemo(() => getCurrentMonthIndex(stations, params), [params, stations]);
   const periodLabel = selectedSheet?.periodLabels?.[currentMonthIndex] || MONTHS_SHORT[currentMonthIndex];
   const currentMonthLabel = currentMonthIndex >= 0 ? `${periodLabel} ${visualizationYear}` : 'latest available data';
@@ -224,7 +305,7 @@ const VisualizationView = ({ type }) => {
 
   useEffect(() => {
     let cancelled = false;
-    loadLocations().then((locations) => {
+    loadStationLocations().then((locations) => {
       if (!cancelled) setStationLocations(locations);
     }).catch(() => {
       if (!cancelled) setStationLocations([]);
@@ -343,24 +424,33 @@ const VisualizationView = ({ type }) => {
   const forecastCards = useMemo(() => {
     if (!activeForecastStation) return [];
 
+    const buildForecast = (FORECAST_ENGINES[forecastEngine] || FORECAST_ENGINES.prophet).build;
     return visibleForecastParams
       .map((param) => {
         const observed = MONTHS_SHORT.map((month, index) => ({
           month,
           actual: getMonthlyNumber(getParamData(activeForecastStation, param), index),
         })).filter((point) => point.actual !== null);
-        const technical = buildTechnicalForecast(observed);
+        const technical = buildForecast(observed);
+        // Bridge the forecast onto the last observed reading so the (differently
+        // coloured) forecast line connects to the current readings instead of
+        // starting from a detached point.
+        const bridged = observed.map((point, index) => (
+          index === observed.length - 1
+            ? { ...point, forecast: point.actual, lower: point.actual, upper: point.actual }
+            : point
+        ));
         return {
           param,
           observed,
           diagnostics: technical.diagnostics,
-          data: observed.concat(technical.points),
+          data: bridged.concat(technical.points),
         };
       })
       .filter((card) => card.observed.length);
-  }, [activeForecastStation, visibleForecastParams]);
+  }, [activeForecastStation, visibleForecastParams, forecastEngine]);
   const hiddenForecastCount = Math.max(0, forecastParamCandidates.length - forecastCards.length);
-  const activeForecastLabel = 'Fast trend forecast';
+  const activeForecastLabel = (FORECAST_ENGINES[forecastEngine] || FORECAST_ENGINES.prophet).tag;
 
   const titleMap = {
     heatmap: 'Heatmap Matrix',
@@ -591,9 +681,22 @@ const VisualizationView = ({ type }) => {
           <div className="forecast-topline">
             <div>
               <h3>Station Parameter Forecasts</h3>
-              <p>Forecasts use the selected station's monthly values, ordinary least squares trend, and RMSE uncertainty band. Only the first charts render initially for faster loading.</p>
+              <p>Forecasts use the selected station's monthly values. Choose the Prophet additive engine (linear trend + seasonality + widening interval) or the fast OLS trend. Only the first charts render initially for faster loading.</p>
             </div>
             <Space className="forecast-controls" size="middle" wrap>
+              <label>
+                <span>Forecast model</span>
+                <Select
+                  value={forecastEngine}
+                  onChange={setForecastEngine}
+                  options={Object.entries(FORECAST_ENGINES).map(([value, engine]) => ({
+                    value,
+                    label: engine.label,
+                  }))}
+                  popupClassName="wqm-map-select-popup"
+                  getPopupContainer={(trigger) => trigger.parentElement}
+                />
+              </label>
               <label>
                 <span>Station</span>
                 <Select

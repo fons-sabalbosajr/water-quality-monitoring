@@ -1,13 +1,12 @@
 import { Fragment, Suspense, lazy, useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import * as XLSX from 'xlsx';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, LabelList,
 } from 'recharts';
-import stationWorkbookUrl from '../../docs/wqm_stations.xlsx?url';
+import { Button, Select } from 'antd';
 import bagongLogo from '../assets/bagongpilipinaslogo.png';
 import embLogo from '../assets/emblogo.svg';
 import WQM2026 from './WQM2026';
@@ -29,6 +28,7 @@ import {
 import {
   buildWaterbodyOptions, getReadableStations, groupWaterbodyOptions, usePublishedWqmDataset,
 } from '../utils/wqmSheets';
+import { loadStationLocations } from '../utils/stationWorkbook';
 import './Home.css';
 
 const Waterbody3DMap = lazy(() => import('./Waterbody3DMap'));
@@ -306,33 +306,16 @@ const DashboardView = () => {
   useEffect(() => {
     let cancelled = false;
 
-    const loadStationLocations = async () => {
+    const fetchStationLocations = async () => {
       try {
-        const response = await fetch(stationWorkbookUrl);
-        const buffer = await response.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: 'array' });
-        const workbookSheet = workbook.Sheets.Station_List || workbook.Sheets[workbook.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(workbookSheet, { defval: '' });
-        const locations = rows
-          .map((row) => ({
-            id: row.ID,
-            station: String(row.Station || '').trim(),
-            waterbodyLoc: String(row['Waterbody Loc'] || '').trim(),
-            waterbodyRiver: String(row.Waterbody || row['Waterbody River'] || row['Waterbody river'] || '').trim(),
-            barangay: String(row.Barangay || '').trim(),
-            province: String(row.Province || '').trim(),
-            lat: Number(row.LAT),
-            lng: Number(row.LONG),
-          }))
-          .filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng));
-
+        const locations = await loadStationLocations();
         if (!cancelled) setStationLocations(locations);
       } catch {
         if (!cancelled) setStationLocations([]);
       }
     };
 
-    loadStationLocations();
+    fetchStationLocations();
     return () => { cancelled = true; };
   }, []);
 
@@ -405,29 +388,22 @@ const DashboardView = () => {
       <div className="dashboard-controls">
         <label>
           <span>Waterbody</span>
-          <select
+          <Select
+            className="dashboard-antd-select"
             value={activeWaterbodyKey}
-            onChange={(event) => {
-              setSelectedWaterbody(event.target.value);
+            onChange={(value) => {
+              setSelectedWaterbody(value);
               setMapStationFilter('all');
             }}
-          >
-            {groupedWaterbodies.map((group) => (
-              <optgroup key={group.label} label={group.label}>
-                {group.items.map((waterbody) => (
-                  <option key={waterbody.key} value={waterbody.key}>{waterbody.name}</option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Parameter</span>
-          <select value={activeParam} onChange={(event) => setChartParam(event.target.value)} disabled={!chartParams.length}>
-            {chartParams.map((param) => (
-              <option key={param} value={param}>{param}</option>
-            ))}
-          </select>
+            showSearch
+            optionFilterProp="label"
+            popupClassName="dashboard-waterbody-dropdown"
+            popupMatchSelectWidth={false}
+            options={groupedWaterbodies.map((group) => ({
+              label: group.label,
+              options: group.items.map((waterbody) => ({ value: waterbody.key, label: waterbody.name })),
+            }))}
+          />
         </label>
       </div>
     </section>
@@ -446,6 +422,19 @@ const DashboardView = () => {
             <h3 className="chart-title">Parameter Summary — Monthly Station Trends</h3>
             <p className="chart-sub">{activeParam}{activeUnit ? ` ${activeUnit}` : ''} readings per monitoring station · {selectedInfo?.name}</p>
           </div>
+          <label className="chart-header-control">
+            <span>Parameter</span>
+            <Select
+              className="chart-param-antd"
+              value={activeParam}
+              onChange={setChartParam}
+              disabled={!chartParams.length}
+              popupMatchSelectWidth={false}
+              getPopupContainer={(trigger) => trigger.parentElement}
+              style={{ minWidth: 180 }}
+              options={chartParams.map((param) => ({ value: param, label: param }))}
+            />
+          </label>
         </div>
         <div className="chart-wrap">
           {trendData.length ? (
@@ -516,20 +505,26 @@ const DashboardView = () => {
         <div className="map-tools">
           <label>
             <span>Station</span>
-            <select
+            <Select
+              className="dashboard-antd-select"
               value={activeMapStationFilter}
-              onChange={(event) => setMapStationFilter(event.target.value)}
-            >
-              <option value="all">All mapped stations</option>
-              {selectedLocations.map((location) => (
-                <option key={`${location.id}-${location.lat}-${location.lng}`} value={String(location.id)}>
-                  {location.id} - {location.station || location.barangay || 'Station'}
-                </option>
-              ))}
-            </select>
+              onChange={setMapStationFilter}
+              showSearch
+              optionFilterProp="label"
+              popupMatchSelectWidth={false}
+              getPopupContainer={(trigger) => trigger.parentElement}
+              style={{ minWidth: 200 }}
+              options={[
+                { value: 'all', label: 'All mapped stations' },
+                ...selectedLocations.map((location) => ({
+                  value: String(location.id),
+                  label: `${location.id} - ${location.station || location.barangay || 'Station'}`,
+                })),
+              ]}
+            />
           </label>
           <div className="map-tool-actions" aria-label="Map tools">
-            <button type="button" onClick={() => setMapStationFilter('all')}>Reset</button>
+            <Button size="small" onClick={() => setMapStationFilter('all')}>Reset</Button>
           </div>
         </div>
         <Suspense fallback={<div className="map-empty-state">Loading 3D station map...</div>}>
@@ -538,7 +533,7 @@ const DashboardView = () => {
             locations={filteredMapLocations}
             waterbodyName={selectedInfo?.name || 'Waterbody'}
             height={360}
-            emptyMessage="No mapped station coordinates matched this waterbody."
+            emptyMessage={`No station coordinates are available for the displayed waterbody${selectedInfo?.name ? ` (${selectedInfo.name})` : ''}.`}
           />
         </Suspense>
         {!!filteredMapLocations.length && (
@@ -648,15 +643,15 @@ const DashboardView = () => {
             <h3>Observation Panel</h3>
             <p>Field notes recorded for {selectedInfo?.name}</p>
           </div>
-          <select
+          <Select
             className="observation-month-filter"
-            value={activeObservationMonth}
-            onChange={(event) => setSelectedObservationMonth(event.target.value)}
-          >
-            {observationMonths.map((entry) => (
-              <option key={entry.month} value={entry.month}>{entry.month}</option>
-            ))}
-          </select>
+            value={activeObservationMonth || undefined}
+            onChange={setSelectedObservationMonth}
+            popupMatchSelectWidth={false}
+            getPopupContainer={(trigger) => trigger.parentElement}
+            style={{ minWidth: 110 }}
+            options={observationMonths.map((entry) => ({ value: entry.month, label: entry.month }))}
+          />
         </div>
         <div className="observation-list observation-list-side">
           {filteredObservations.length ? filteredObservations.map((entry) => (
@@ -702,6 +697,14 @@ const getStoredAccessSettings = () => {
   }
 };
 
+const getStoredUserAccess = () => {
+  try {
+    return encryptedStorage.getItem('wqms_user_access') || {};
+  } catch {
+    return {};
+  }
+};
+
 /* ── Year placeholder ── */
 const YearPlaceholder = ({ year }) => (
   <div className="wqm-placeholder">
@@ -730,6 +733,7 @@ const Home = () => {
   const [activeWaterbody, setActiveWaterbody] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [accessSettings, setAccessSettings] = useState(getStoredAccessSettings);
+  const [userAccess, setUserAccess] = useState(getStoredUserAccess);
   const { year: publishedYear, sheets: monitoringSheets } = usePublishedWqmDataset();
   const waterbodies = useMemo(() => (
     buildWaterbodyOptions(monitoringSheets)
@@ -746,7 +750,10 @@ const Home = () => {
   }, []);
 
   useEffect(() => {
-    const refreshAccess = () => setAccessSettings(getStoredAccessSettings());
+    const refreshAccess = () => {
+      setAccessSettings(getStoredAccessSettings());
+      setUserAccess(getStoredUserAccess());
+    };
     window.addEventListener('storage', refreshAccess);
     window.addEventListener('wqms:access-settings', refreshAccess);
     return () => {
@@ -755,9 +762,12 @@ const Home = () => {
     };
   }, []);
 
-  const canAccess = (feature) => (
-    (ACCESS_ROLE_RANK[user?.role] || 0) >= (ACCESS_ROLE_RANK[accessSettings[feature] || 'user'] || 1)
-  );
+  const canAccess = (feature) => {
+    const override = userAccess?.[user?._id]?.[feature];
+    if (override === 'allow') return true;
+    if (override === 'deny') return false;
+    return (ACCESS_ROLE_RANK[user?.role] || 0) >= (ACCESS_ROLE_RANK[accessSettings[feature] || 'user'] || 1);
+  };
 
   const nav = (view) => {
     setActiveView(view);
@@ -864,13 +874,14 @@ const Home = () => {
             </button>
           )}
 
+          <p className="nav-section-label">Data</p>
           {canAccess('waterbodies') && (
             <button
               className={`nav-item nav-group-toggle${waterbodiesOpen ? ' open' : ''}`}
               onClick={() => setWaterbodiesOpen((o) => !o)}
             >
               <IcoWater size={15} />
-              <span className="nav-label">Waterbodies</span>
+              <span className="nav-label">Waterbody Profiles</span>
               <span className="nav-chevron-icon">
                 {waterbodiesOpen ? <IcoChevronDown size={12} /> : <IcoChevronRight size={12} />}
               </span>
@@ -891,8 +902,6 @@ const Home = () => {
               ))}
             </div>
           )}
-
-          <p className="nav-section-label">Data</p>
 
           {canAccess('tabular') && (
             <button

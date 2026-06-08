@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Select, Space, Tag } from 'antd';
+import { Button, Card, Modal, Select, Space, Tag } from 'antd';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
-import * as XLSX from 'xlsx';
-import stationWorkbookUrl from '../../docs/wqm_stations.xlsx?url';
 import CesiumStationMap from '../components/CesiumStationMap';
 import encryptedStorage from '../utils/encryptedStorage';
+import { loadStationLocations } from '../utils/stationWorkbook';
 import { buildWaterbodyOptions, getReadableStations, usePublishedWqmDataset } from '../utils/wqmSheets';
 import './Waterbody3DMap.css';
 
@@ -111,25 +110,6 @@ const enrichLocation = (location, waterbody, stationList, profileSettings = {}) 
   };
 };
 
-const loadStationLocations = async () => {
-  const response = await fetch(stationWorkbookUrl);
-  const buffer = await response.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: 'array' });
-  const workbookSheet = workbook.Sheets.Station_List || workbook.Sheets[workbook.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(workbookSheet, { defval: '' })
-    .map((row) => ({
-      id: row.ID,
-      station: String(row.Station || '').trim(),
-      waterbodyLoc: String(row['Waterbody Loc'] || '').trim(),
-      waterbodyRiver: String(row.Waterbody || row['Waterbody River'] || row['Waterbody river'] || '').trim(),
-      barangay: String(row.Barangay || '').trim(),
-      province: String(row.Province || '').trim(),
-      lat: Number(row.LAT),
-      lng: Number(row.LONG),
-    }))
-    .filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng));
-};
-
 const Waterbody3DMap = () => {
   const { year, sheets, loading, error } = usePublishedWqmDataset();
   const waterbodies = useMemo(() => buildWaterbodyOptions(sheets), [sheets]);
@@ -139,6 +119,7 @@ const Waterbody3DMap = () => {
   const [locationError, setLocationError] = useState('');
   const [collapsedWaterbodies, setCollapsedWaterbodies] = useState(() => new Set());
   const [profileSettings, setProfileSettings] = useState(() => encryptedStorage.getItem('wqms_waterbody_profile_settings') || {});
+  const [mapRenderError, setMapRenderError] = useState('');
 
   const activeWaterbodyKey = waterbodies.some((waterbody) => waterbody.key === waterbodyKey)
     ? waterbodyKey
@@ -253,6 +234,17 @@ const Waterbody3DMap = () => {
     });
   };
 
+  useEffect(() => {
+    if (!mapRenderError) return undefined;
+    const modal = Modal.error({
+      title: 'Unable to render the 3D map',
+      content: mapRenderError,
+      okText: 'Dismiss',
+      afterClose: () => setMapRenderError(''),
+    });
+    return () => modal.destroy();
+  }, [mapRenderError]);
+
   return (
     <div className="map3d-page">
       <Card className="map3d-header" size="small">
@@ -308,6 +300,7 @@ const Waterbody3DMap = () => {
           defaultTerrainEnabled
           defaultBuildingsEnabled
           birdseye
+          onRenderError={setMapRenderError}
           emptyMessage="No station coordinates matched this waterbody."
         />
       </section>

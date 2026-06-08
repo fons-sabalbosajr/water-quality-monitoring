@@ -18,6 +18,7 @@ import {
   EyeOutlined,
 } from '@ant-design/icons';
 import {
+  BoundingSphere,
   Cartesian2,
   Cartesian3,
   CallbackProperty,
@@ -26,12 +27,12 @@ import {
   createOsmBuildingsAsync,
   createWorldTerrainAsync,
   EllipsoidTerrainProvider,
+  HeadingPitchRange,
   HeightReference,
   ImageryLayer,
   Ion,
   LabelStyle,
   Math as CesiumMath,
-  Rectangle,
   ScreenSpaceEventType,
   UrlTemplateImageryProvider,
   VerticalOrigin,
@@ -113,49 +114,18 @@ const isCompactViewport = () => (
   && (window.innerWidth < 900 || window.matchMedia?.('(pointer: coarse)').matches)
 );
 
-const getBounds = (locations) => {
-  if (!locations.length) return null;
-  const lats = locations.map((point) => point.lat);
-  const lngs = locations.map((point) => point.lng);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-  const latPad = Math.max((maxLat - minLat) * 0.65, 0.018);
-  const lngPad = Math.max((maxLng - minLng) * 0.65, 0.018);
-  return {
-    west: minLng - lngPad,
-    south: minLat - latPad,
-    east: maxLng + lngPad,
-    north: maxLat + latPad,
-    centerLat: (minLat + maxLat) / 2,
-    centerLng: (minLng + maxLng) / 2,
-    latSpan: Math.max(maxLat - minLat, 0.01),
-    lngSpan: Math.max(maxLng - minLng, 0.01),
-  };
-};
-
 const focusStationBounds = (viewer, locations, duration = 0.65, birdseye = false) => {
-  const bounds = getBounds(locations);
-  if (!viewer || !bounds) return;
+  const safe = (locations || []).filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+  if (!viewer || !safe.length) return;
 
-  if (birdseye) {
-    const maxSpanMeters = Math.max(bounds.latSpan, bounds.lngSpan) * 111000;
-    const height = Math.max(1400, Math.min(320000, maxSpanMeters * 3.2));
-    viewer.camera.flyTo({
-      destination: Cartesian3.fromDegrees(bounds.centerLng, bounds.centerLat, height),
-      orientation: {
-        heading: 0,
-        pitch: -CesiumMath.PI_OVER_TWO,
-        roll: 0,
-      },
-      duration,
-    });
-    return;
-  }
+  const positions = safe.map((point) => Cartesian3.fromDegrees(point.lng, point.lat, 0));
+  const sphere = BoundingSphere.fromPoints(positions);
+  const range = Math.max(sphere.radius * 3.4, 2200);
+  // Inclined "aerial" framing (oblique pitch) instead of a flat top-down view.
+  const pitch = -CesiumMath.toRadians(birdseye ? 25 : 20);
 
-  viewer.camera.flyTo({
-    destination: Rectangle.fromDegrees(bounds.west, bounds.south, bounds.east, bounds.north),
+  viewer.camera.flyToBoundingSphere(sphere, {
+    offset: new HeadingPitchRange(0, pitch, range),
     duration,
   });
 };
@@ -299,6 +269,7 @@ const CesiumStationMap = ({
   defaultTerrainEnabled = false,
   defaultBuildingsEnabled = false,
   birdseye = false,
+  onRenderError,
   emptyMessage = 'No mapped station coordinates matched this waterbody.',
 }) => {
   const mountRef = useRef(null);
@@ -310,6 +281,7 @@ const CesiumStationMap = ({
   const buildingsRef = useRef(null);
   const cameraMovingRef = useRef(false);
   const layerErrorTimerRef = useRef(null);
+  const onRenderErrorRef = useRef(onRenderError);
   const [mapTiler, setMapTiler] = useState({
     key: import.meta.env.VITE_MAPTILER_API_KEY || import.meta.env.VITE_MAPTILER_KEY || '',
     configured: false,
@@ -321,7 +293,7 @@ const CesiumStationMap = ({
   const [buildingsEnabled, setBuildingsEnabled] = useState(false);
   const [buildingsLoading, setBuildingsLoading] = useState(false);
   const [toolMessage, setToolMessage] = useState('');
-  const [toolsOpen, setToolsOpen] = useState(true);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [renderFailed, setRenderFailed] = useState('');
   const [cameraElevation, setCameraElevation] = useState(null);
   const [selectedLocation, setSelectedLocation] = useState(null);
@@ -336,6 +308,10 @@ const CesiumStationMap = ({
   useEffect(() => {
     latestLocationsRef.current = safeLocations;
   }, [safeLocations]);
+
+  useEffect(() => {
+    onRenderErrorRef.current = onRenderError;
+  }, [onRenderError]);
 
   useEffect(() => {
     if (mapTiler.key) return;
@@ -388,7 +364,11 @@ const CesiumStationMap = ({
         baseLayer: new ImageryLayer(createImageryProvider('osm', '')),
       });
     } catch (error) {
-      queueMicrotask(() => setRenderFailed(error?.message || 'Unable to start the 3D map renderer.'));
+      const message = error?.message || 'Unable to start the 3D map renderer.';
+      queueMicrotask(() => {
+        setRenderFailed(message);
+        onRenderErrorRef.current?.(message);
+      });
       return undefined;
     }
     baseLayerRef.current = viewer.imageryLayers.get(0);
@@ -403,8 +383,10 @@ const CesiumStationMap = ({
     viewer.scene.screenSpaceCameraController.maximumZoomDistance = 8000000;
     if ('verticalExaggeration' in viewer.scene) viewer.scene.verticalExaggeration = 1.35;
     const handleRenderError = (_scene, error) => {
-      setRenderFailed(error?.message || 'Cesium rendering stopped.');
+      const message = error?.message || 'Cesium rendering stopped.';
+      setRenderFailed(message);
       setToolMessage('3D rendering stopped. Try disabling terrain or buildings.');
+      onRenderErrorRef.current?.(message);
     };
 
     const updateCameraElevation = () => {
@@ -814,7 +796,7 @@ const CesiumStationMap = ({
               </div>
             )}
           </Card>
-          <div className="cesium-elevation-badge">
+          <div className={`cesium-elevation-badge ${toolsOpen ? 'tools-open' : 'tools-collapsed'}`}>
             <span>Elevation</span>
             <strong>{cameraElevation === null ? '--' : `${fmt(cameraElevation)} m`}</strong>
           </div>

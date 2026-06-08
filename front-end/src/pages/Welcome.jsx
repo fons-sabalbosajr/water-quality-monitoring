@@ -100,6 +100,14 @@ const heroCards = [
   { value: 'R-III', label: 'Regional waterbodies', renderIcon: (props) => <IcoMapPin {...props} /> },
 ];
 
+// Talavera coordinates are reused only as an unnamed sample preview.
+const SAMPLE_WATERBODY_NAME = 'Sample Waterbody';
+const sampleStations = talaveraStations.map((station) => ({
+  ...station,
+  waterbodyName: SAMPLE_WATERBODY_NAME,
+  waterbodyRiver: SAMPLE_WATERBODY_NAME,
+}));
+
 const features = [
   {
     title: 'Operational Dashboard',
@@ -216,7 +224,7 @@ const Welcome = () => {
             </p>
             <div className="welcome-actions">
               <Link className="welcome-primary-action" to="/login">Access System</Link>
-              <a className="welcome-secondary-action" href="#map-preview">View Talavera Preview</a>
+              <a className="welcome-secondary-action" href="#map-preview">View Sample Preview</a>
             </div>
           </div>
 
@@ -236,7 +244,7 @@ const Welcome = () => {
                 </div>
                 <div className="welcome-screen-main">
                   <div className="welcome-dashboard-head">
-                    <span>Talavera River</span>
+                    <span>Sample Waterbody</span>
                     <strong>Class C Monitoring</strong>
                   </div>
                   <div className="welcome-screen-metrics">
@@ -264,17 +272,22 @@ const Welcome = () => {
               </div>
             </div>
 
-            <div className="welcome-device welcome-tablet-screen">
-              <div className="welcome-tablet-map">
-                <span className="welcome-map-pin pin-a" />
-                <span className="welcome-map-pin pin-b" />
-                <span className="welcome-map-pin pin-c" />
-                <span className="welcome-water-line line-a" />
-                <span className="welcome-water-line line-b" />
+            <div className="welcome-device welcome-tablet-screen welcome-hero-map-device" aria-label="Sample waterbody 3D aerial map on a device">
+              <div className="welcome-hero-map-frame">
+                <Suspense fallback={<div className="welcome-map-loading">Loading 3D map preview...</div>}>
+                  <CesiumStationMap
+                    locations={sampleStations}
+                    waterbodyName={SAMPLE_WATERBODY_NAME}
+                    height={210}
+                    birdseye
+                    showStationLabels={false}
+                    emptyMessage="Sample waterbody preview is not available."
+                  />
+                </Suspense>
               </div>
               <div className="welcome-tablet-copy">
-                <strong>Tablet Map Mode</strong>
-                <span>Station layers and waterbody focus</span>
+                <strong>Sample Waterbody Preview</strong>
+                <span>Inclined 3D aerial station view</span>
               </div>
             </div>
           </div>
@@ -310,25 +323,17 @@ const Welcome = () => {
       <section className="welcome-section welcome-map-preview" id="map-preview" aria-labelledby="map-title">
         <div className="welcome-section-head">
           <p>Cesium 3D Map Preview</p>
-          <h2 id="map-title">Talavera River plotted with station markers</h2>
+          <h2 id="map-title">Sample waterbody plotted with station markers</h2>
         </div>
         <div className="welcome-map-grid">
-          <div className="welcome-cesium-frame">
-            <Suspense fallback={<div className="welcome-map-loading">Loading Talavera 3D map preview...</div>}>
-              <CesiumStationMap
-                locations={talaveraStations}
-                waterbodyName="Talavera River"
-                height={460}
-                birdseye
-                showStationLabels
-                defaultTerrainEnabled={false}
-                defaultBuildingsEnabled={false}
-                emptyMessage="Talavera station preview is not available."
-              />
-            </Suspense>
+          <div className="welcome-map-note">
+            <span className="welcome-map-note-icon"><IcoLayers size={22} /></span>
+            <h3>Sample waterbody preview</h3>
+            <p>The interactive 3D aerial map is shown on the device in the hero section above, with an inclined terrain view, station markers, layer tools, and station detail cards.</p>
+            <Link className="welcome-secondary-action welcome-map-note-action" to="/login">Open full 3D map</Link>
           </div>
           <div className="welcome-station-panel">
-            {talaveraStations.map((station) => (
+            {sampleStations.map((station) => (
               <article key={station.id}>
                 <span style={{ '--station-color': station.markerColor }} />
                 <div>

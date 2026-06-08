@@ -1,12 +1,3 @@
-const path = require('path');
-
-let XLSX;
-try {
-  XLSX = require('xlsx');
-} catch {
-  XLSX = require(path.resolve(__dirname, '..', '..', 'front-end', 'node_modules', 'xlsx'));
-}
-
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const SKIP_SHEETS = new Set(['SUMMARY', 'PLANNING (BUDGET HEARING)']);
 const PERIOD_ALIASES = [
@@ -155,13 +146,13 @@ const findClassInfo = (rows, headerIndex) => {
   return '';
 };
 
-const parseWorkbook = (filePath, year) => {
-  const workbook = XLSX.readFile(filePath);
+const parseWorkbook = async (filePath, year) => {
+  const { default: readXlsxFile } = await import('read-excel-file/node');
+  const workbook = await readXlsxFile(filePath);
   const sheets = [];
 
-  workbook.SheetNames.forEach((sheetName) => {
-    if (SKIP_SHEETS.has(sheetName.toUpperCase())) return;
-    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
+  workbook.forEach(({ sheet: sheetName, data: rows = [] }) => {
+    if (!sheetName || SKIP_SHEETS.has(String(sheetName).toUpperCase())) return;
     const headerIndex = findHeaderIndex(rows);
     if (headerIndex < 0) return;
 

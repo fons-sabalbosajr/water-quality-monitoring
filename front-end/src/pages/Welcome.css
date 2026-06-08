@@ -506,6 +506,65 @@
   line-height: 1.35;
 }
 
+.welcome-hero-map-device {
+  min-height: 300px;
+  width: min(360px, 66%);
+}
+
+.welcome-hero-map-frame {
+  position: relative;
+  min-height: 210px;
+  overflow: hidden;
+  border-radius: 0.8rem;
+  border: 1px solid rgba(214, 219, 246, 0.4);
+  background: #07111f;
+}
+
+.welcome-hero-map-frame .cesium-station-map {
+  border-radius: 0.8rem;
+  border: 0;
+}
+
+.welcome-map-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.6rem;
+  min-width: 0;
+  border: 1px solid var(--welcome-border);
+  border-radius: 0.8rem;
+  background: var(--welcome-card, rgba(255, 255, 255, 0.06));
+  box-shadow: var(--welcome-shadow);
+  padding: 1.4rem 1.5rem;
+}
+
+.welcome-map-note-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 0.7rem;
+  background: rgba(68, 106, 203, 0.16);
+  color: #446acb;
+}
+
+.welcome-map-note h3 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.welcome-map-note p {
+  margin: 0;
+  color: var(--welcome-muted, #475569);
+  line-height: 1.55;
+}
+
+.welcome-map-note-action {
+  margin-top: auto;
+  text-decoration: none;
+}
+
 .welcome-hero-cards,
 .welcome-feature-grid,
 .welcome-map-grid,

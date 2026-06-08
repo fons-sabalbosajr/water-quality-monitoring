@@ -1228,6 +1228,21 @@ tbody tr:hover {
   flex-wrap: wrap;
 }
 
+.chart-header-control {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 220px;
+}
+
+.chart-header-control span {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: right;
+}
+
 .chart-title {
   font-size: 1rem;
   font-weight: 700;
@@ -1431,8 +1446,11 @@ tbody tr:hover {
 
 .dashboard-controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(280px, 420px);
   gap: 0.75rem;
+  justify-content: end;
+  justify-self: end;
+  width: 100%;
 }
 
 .dashboard-controls label {
@@ -1465,6 +1483,22 @@ tbody tr:hover {
 .dashboard-controls select:focus {
   border-color: #446ACB;
   box-shadow: 0 0 0 3px rgba(68,106,203,0.12);
+}
+
+/* Antd selects used in the dashboard controls/map tools */
+.dashboard-controls .dashboard-antd-select.ant-select {
+  width: 100%;
+}
+
+.dashboard-waterbody-dropdown.ant-select-dropdown {
+  z-index: 1200;
+}
+
+.dashboard-controls .dashboard-antd-select .ant-select-selector,
+.map-tools .dashboard-antd-select .ant-select-selector {
+  min-height: 40px;
+  border-radius: 0.55rem;
+  align-items: center;
 }
 
 .dashboard-summary-strip {
@@ -2218,7 +2252,7 @@ tbody tr:hover {
   max-height: 520px;
 }
 
-.observation-month-filter {
+select.observation-month-filter {
   min-width: 120px;
   border: 1.5px solid var(--border);
   border-radius: 0.5rem;
@@ -2348,7 +2382,7 @@ tbody tr:hover {
 [data-theme='dark'] .dashboard-controls select,
 [data-theme='dark'] .chart-param-sel,
 [data-theme='dark'] .map-tools select,
-[data-theme='dark'] .observation-month-filter {
+[data-theme='dark'] select.observation-month-filter {
   background: var(--input-bg);
   border-color: var(--border);
   color: var(--text-primary);
