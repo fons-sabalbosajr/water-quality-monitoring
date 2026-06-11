@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import embLogo from '../assets/emblogo.svg';
 import bgEmb from '../assets/bgemb.webp';
@@ -95,9 +95,9 @@ const talaveraStations = [
 ];
 
 const heroCards = [
-  { value: '3D', label: 'Cesium map preview', renderIcon: (props) => <IcoLayers {...props} /> },
-  { value: 'AI', label: 'Forecast assistant', renderIcon: (props) => <IcoTrendUp {...props} /> },
-  { value: 'R-III', label: 'Regional waterbodies', renderIcon: (props) => <IcoMapPin {...props} /> },
+  { value: '3-Dimensional', label: 'Cesium map preview', renderIcon: (props) => <IcoLayers {...props} /> },
+  { value: 'Artificial Intelligence', label: 'Forecast assistant', renderIcon: (props) => <IcoTrendUp {...props} /> },
+  { value: 'Central Luzon', label: 'all waterbodies', renderIcon: (props) => <IcoMapPin {...props} /> },
 ];
 
 // Talavera coordinates are reused only as an unnamed sample preview.
@@ -180,6 +180,17 @@ const Welcome = () => {
   const { theme, toggle } = useTheme();
   const isDark = theme === 'dark';
 
+  useEffect(() => {
+    const io = new IntersectionObserver(
+      (entries) => entries.forEach((entry) => {
+        if (entry.isIntersecting) entry.target.classList.add('is-visible');
+      }),
+      { threshold: 0.12 },
+    );
+    document.querySelectorAll('.welcome-animate').forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
+
   return (
     <main className="welcome-page">
       <section
@@ -201,6 +212,7 @@ const Welcome = () => {
             <a href="#map-preview">3D Map</a>
             <a href="#ai-assistant">AI Assistant</a>
             <a href="#menus">Menus</a>
+            <Link to="/public-dashboard" className="welcome-nav-publink">Public Dashboard</Link>
           </nav>
 
           <div className="welcome-nav-actions">
@@ -228,8 +240,31 @@ const Welcome = () => {
             </div>
           </div>
 
-          <div className="welcome-visual" aria-label="Dashboard desktop and tablet mockup">
-            <div className="welcome-device welcome-desktop-screen">
+          <div className="welcome-visual" aria-label="3D map and dashboard mockup">
+            {/* Bigger screen — Cesium 3D Map */}
+            <div className="welcome-device welcome-desktop-screen" aria-label="Sample waterbody 3D aerial map">
+              <div className="welcome-screen-bar">
+                <span />
+                <span />
+                <span />
+                <strong>3D Station Map — Sample Waterbody</strong>
+              </div>
+              <div className="welcome-hero-map-frame welcome-hero-map-full">
+                <Suspense fallback={<div className="welcome-map-loading">Loading 3D map preview...</div>}>
+                  <CesiumStationMap
+                    locations={sampleStations}
+                    waterbodyName={SAMPLE_WATERBODY_NAME}
+                    height={355}
+                    birdseye
+                    showStationLabels={false}
+                    emptyMessage="Sample waterbody preview is not available."
+                  />
+                </Suspense>
+              </div>
+            </div>
+
+            {/* Smaller screen — Dashboard mockup */}
+            {/* <div className="welcome-device welcome-tablet-screen welcome-tablet-dashboard" aria-label="Dashboard interface mockup">
               <div className="welcome-screen-bar">
                 <span />
                 <span />
@@ -270,26 +305,7 @@ const Welcome = () => {
                   </div>
                 </div>
               </div>
-            </div>
-
-            <div className="welcome-device welcome-tablet-screen welcome-hero-map-device" aria-label="Sample waterbody 3D aerial map on a device">
-              <div className="welcome-hero-map-frame">
-                <Suspense fallback={<div className="welcome-map-loading">Loading 3D map preview...</div>}>
-                  <CesiumStationMap
-                    locations={sampleStations}
-                    waterbodyName={SAMPLE_WATERBODY_NAME}
-                    height={210}
-                    birdseye
-                    showStationLabels={false}
-                    emptyMessage="Sample waterbody preview is not available."
-                  />
-                </Suspense>
-              </div>
-              <div className="welcome-tablet-copy">
-                <strong>Sample Waterbody Preview</strong>
-                <span>Inclined 3D aerial station view</span>
-              </div>
-            </div>
+            </div> */}
           </div>
         </div>
 
@@ -302,6 +318,17 @@ const Welcome = () => {
             </article>
           ))}
         </div>
+        <div className="welcome-water-waves" aria-hidden="true">
+          <svg className="welcome-wave welcome-wave-a" viewBox="0 0 1200 80" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M0,40 C150,80 350,0 600,40 C850,80 1050,0 1200,40 L1200,80 L0,80 Z" />
+          </svg>
+          <svg className="welcome-wave welcome-wave-b" viewBox="0 0 1200 80" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M0,20 C200,60 400,0 600,30 C800,60 1000,0 1200,20 L1200,80 L0,80 Z" />
+          </svg>
+          <svg className="welcome-wave welcome-wave-c" viewBox="0 0 1200 80" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M0,55 C200,20 500,70 700,40 C900,15 1100,60 1200,55 L1200,80 L0,80 Z" />
+          </svg>
+        </div>
       </section>
 
       <section className="welcome-section welcome-features" id="features" aria-labelledby="features-title">
@@ -311,7 +338,7 @@ const Welcome = () => {
         </div>
         <div className="welcome-feature-grid">
           {features.map(({ title, text, renderIcon }) => (
-            <article className="welcome-feature-card" key={title}>
+            <article className="welcome-feature-card welcome-animate" key={title}>
               <span className="welcome-feature-icon">{renderIcon({ size: 22 })}</span>
               <h3>{title}</h3>
               <p>{text}</p>
@@ -330,7 +357,7 @@ const Welcome = () => {
             <span className="welcome-map-note-icon"><IcoLayers size={22} /></span>
             <h3>Sample waterbody preview</h3>
             <p>The interactive 3D aerial map is shown on the device in the hero section above, with an inclined terrain view, station markers, layer tools, and station detail cards.</p>
-            <Link className="welcome-secondary-action welcome-map-note-action" to="/login">Open full 3D map</Link>
+            <Link className="welcome-secondary-action welcome-map-note-action" to="/login">Open Full 3D Map</Link>
           </div>
           <div className="welcome-station-panel">
             {sampleStations.map((station) => (
@@ -360,7 +387,7 @@ const Welcome = () => {
         </div>
         <div className="welcome-ai-uses">
           {aiUses.map((item) => (
-            <span key={item}>
+            <span key={item} className="welcome-animate">
               <IcoCheckCircle size={18} />
               {item}
             </span>
@@ -375,7 +402,7 @@ const Welcome = () => {
         </div>
         <div className="welcome-menu-grid">
           {menuCards.map(({ title, label, renderIcon, rows }) => (
-            <article className="welcome-menu-card" key={title}>
+            <article className="welcome-menu-card welcome-animate" key={title}>
               <header>
                 <span>{renderIcon({ size: 22 })}</span>
                 <div>
@@ -403,7 +430,7 @@ const Welcome = () => {
         </div>
         <div className="welcome-use-list">
           {uses.map((item) => (
-            <span key={item}>
+            <span key={item} className="welcome-animate">
               <IcoCheckCircle size={18} />
               {item}
             </span>

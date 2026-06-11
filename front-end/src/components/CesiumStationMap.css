@@ -1,15 +1,36 @@
 .cesium-station-map {
   position: relative;
-  min-height: var(--cesium-map-height);
+  height: var(--cesium-map-height);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 0.75rem;
   overflow: hidden;
   background: #07111f;
 }
 
+.cesium-map-hud {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.55rem;
+  right: 0.55rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0;
+  background: none;
+  border: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
 .cesium-station-map-canvas {
   width: 100%;
-  height: var(--cesium-map-height);
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
 }
 
 .cesium-station-map-canvas canvas {
@@ -19,16 +40,19 @@
 }
 
 .cesium-map-tools {
-  position: absolute;
-  top: 0.75rem;
-  left: 0.75rem;
-  z-index: 5;
-  width: min(292px, calc(100% - 1.5rem));
+  position: relative;
+  z-index: 1;
+  width: min(236px, calc(100% - 94px));
+  max-height: none;
+  overflow-y: auto;
   border: 1px solid rgba(255,255,255,0.18);
   border-radius: 0.65rem;
   background: rgba(15,23,42,0.82);
   color: #e2e8f0;
   backdrop-filter: blur(12px);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.2) transparent;
+  pointer-events: auto;
 }
 
 .cesium-map-tools.ant-card,
@@ -42,9 +66,9 @@
 }
 
 .cesium-map-tools .ant-card-head {
-  min-height: 38px;
+  min-height: 34px;
   border-bottom: 1px solid rgba(255,255,255,0.1);
-  padding: 0 0.45rem;
+  padding: 0 0.4rem;
 }
 
 .cesium-map-tools .ant-card-head-title,
@@ -59,11 +83,12 @@
 }
 
 .cesium-map-tools .ant-card-body {
-  padding: 0.45rem;
+  padding: 0.38rem;
 }
 
 .cesium-map-tools.collapsed {
   width: auto;
+  max-width: max-content;
 }
 
 .cesium-map-tools.collapsed .ant-card-head {
@@ -73,6 +98,8 @@
 .cesium-map-tools.collapsed .ant-card-body {
   display: none;
 }
+
+/* Prevent expanded tools from overflowing the map container — handled on root */
 
 .cesium-tools-toggle {
   display: flex;
@@ -87,6 +114,8 @@
   cursor: pointer;
   font: inherit;
   padding: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
 .cesium-tools-toggle span {
@@ -99,7 +128,7 @@
 
 .cesium-tools-body {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 
 .cesium-layer-field {
@@ -112,9 +141,9 @@
   align-items: center;
   gap: 0.35rem;
   color: #fff;
-  font-size: 0.56rem;
-  font-weight: 900;
-  letter-spacing: 0.07em;
+  font-size: 0.52rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -129,10 +158,11 @@
 
 .cesium-tool-grid .ant-btn {
   flex: 1 1 calc(50% - 0.2rem);
-  min-width: 112px;
+  min-width: 92px;
   justify-content: center;
-  font-size: 0.68rem;
-  font-weight: 800;
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding-inline: 0.45rem;
 }
 
 .cesium-map-tools .ant-select-selector,
@@ -178,44 +208,33 @@
 }
 
 .cesium-elevation-badge {
-  position: absolute;
-  top: 0.75rem;
-  z-index: 5;
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 0.12rem;
-  min-width: 118px;
+  align-self: flex-start;
+  margin-top: 3.15rem;
+  min-width: 94px;
   border: 1px solid rgba(255,255,255,0.18);
   border-radius: 0.6rem;
   background: rgba(15,23,42,0.78);
   color: #e2e8f0;
-  padding: 0.45rem 0.6rem;
+  padding: 0.38rem 0.48rem;
   backdrop-filter: blur(12px);
-  transition: left 0.2s ease, right 0.2s ease, top 0.2s ease;
-}
-
-/* Sits directly beside the collapsed Layer Tools pill. */
-.cesium-elevation-badge.tools-collapsed {
-  left: calc(0.75rem + 150px);
-  right: auto;
-}
-
-/* Moves to the opposite corner so it clears the expanded Layer Tools card. */
-.cesium-elevation-badge.tools-open {
-  left: auto;
-  right: 0.75rem;
+  pointer-events: auto;
 }
 
 .cesium-elevation-badge span {
   color: #93c5fd;
-  font-size: 0.56rem;
-  font-weight: 900;
+  font-size: 0.5rem;
+  font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 
 .cesium-elevation-badge strong {
   color: #f8fafc;
-  font-size: 0.9rem;
+  font-size: 0.76rem;
   line-height: 1.1;
 }
 
@@ -387,29 +406,28 @@
 
 @media (max-width: 780px) {
   .cesium-station-map {
-    min-height: min(var(--cesium-map-height), calc(100svh - 7rem));
+    height: min(var(--cesium-map-height), calc(100svh - 7rem));
+  }
+
+  .cesium-map-hud {
+    top: 0.45rem;
+    left: 0.45rem;
+    right: 0.45rem;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.4rem;
   }
 
   .cesium-station-map-canvas {
-    height: min(var(--cesium-map-height), calc(100svh - 7rem));
     min-height: 420px;
   }
 
   .cesium-map-tools {
-    left: 0.65rem;
-    top: 0.65rem;
-    width: min(252px, calc(100% - 1.3rem));
-  }
-
-  .cesium-map-tools.open {
-    max-height: min(318px, calc(100% - 1.3rem));
-    overflow: auto;
+    width: min(100%, 252px);
   }
 
   .cesium-elevation-badge {
-    left: 0.65rem;
-    top: 3.55rem;
-    bottom: auto;
+    margin-top: 2.8rem;
     min-width: 104px;
   }
 
@@ -430,8 +448,12 @@
 }
 
 @media (max-width: 480px) {
+  .cesium-map-hud {
+    gap: 0.4rem;
+  }
+
   .cesium-map-tools {
-    width: min(218px, calc(100% - 1.3rem));
+    width: 100%;
   }
 
   .cesium-map-tools button,
@@ -440,6 +462,7 @@
   }
 
   .cesium-elevation-badge {
+    margin-top: 2.55rem;
     font-size: 0.68rem;
     padding: 0.38rem 0.48rem;
   }

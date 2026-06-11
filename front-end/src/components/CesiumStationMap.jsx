@@ -272,6 +272,7 @@ const CesiumStationMap = ({
   onRenderError,
   emptyMessage = 'No mapped station coordinates matched this waterbody.',
 }) => {
+  const mapHeightStyle = typeof height === 'number' ? `${height}px` : height;
   const mountRef = useRef(null);
   const viewerRef = useRef(null);
   const baseLayerRef = useRef(null);
@@ -282,6 +283,7 @@ const CesiumStationMap = ({
   const cameraMovingRef = useRef(false);
   const layerErrorTimerRef = useRef(null);
   const onRenderErrorRef = useRef(onRenderError);
+  const resizeObserverRef = useRef(null);
   const [mapTiler, setMapTiler] = useState({
     key: import.meta.env.VITE_MAPTILER_API_KEY || import.meta.env.VITE_MAPTILER_KEY || '',
     configured: false,
@@ -312,6 +314,36 @@ const CesiumStationMap = ({
   useEffect(() => {
     onRenderErrorRef.current = onRenderError;
   }, [onRenderError]);
+
+  useEffect(() => {
+    const mountNode = mountRef.current;
+    if (!mountNode || typeof ResizeObserver === 'undefined') return undefined;
+
+    const notifyResize = () => {
+      const viewer = viewerRef.current;
+      if (!viewer || viewer.isDestroyed()) return;
+      try {
+        viewer.resize();
+        viewer.scene.requestRender();
+      } catch {
+        // Ignore transient resize timing errors while the viewer is mounting.
+      }
+    };
+
+    const observer = new ResizeObserver(() => {
+      requestAnimationFrame(notifyResize);
+    });
+
+    observer.observe(mountNode);
+    if (mountNode.parentElement) observer.observe(mountNode.parentElement);
+    resizeObserverRef.current = observer;
+    requestAnimationFrame(notifyResize);
+
+    return () => {
+      observer.disconnect();
+      resizeObserverRef.current = null;
+    };
+  }, [toolsOpen, height]);
 
   useEffect(() => {
     if (mapTiler.key) return;
@@ -731,75 +763,77 @@ const CesiumStationMap = ({
   const selectedStatus = getOverallStatus(selectedMetrics);
 
   return (
-    <div className={`cesium-station-map ${className}`} style={{ '--cesium-map-height': `${height}px` }}>
+    <div className={`cesium-station-map ${className}`} style={{ '--cesium-map-height': mapHeightStyle }}>
       {renderFailed ? (
         <div className="cesium-map-empty cesium-map-error">{renderFailed}</div>
       ) : safeLocations.length ? (
         <>
-          <div ref={mountRef} className="cesium-station-map-canvas" />
-          <Card
-            className={`cesium-map-tools ${toolsOpen ? 'open' : 'collapsed'}`}
-            size="small"
-            aria-label="3D map tools"
-            title={(
-              <button
-                type="button"
-                className="cesium-tools-toggle"
-                onClick={() => setToolsOpen((open) => !open)}
-                aria-expanded={toolsOpen}
-                title={toolsOpen ? 'Collapse layer tools' : 'Expand layer tools'}
-              >
-                <span><AppstoreOutlined /> Layer Tools</span>
-                {toolsOpen ? <IcoChevronDown size={13} /> : <IcoChevronRight size={13} />}
-              </button>
-            )}
-          >
-            {toolsOpen && (
-              <div className="cesium-tools-body">
-                <div className="cesium-layer-field">
-                  <span><IcoLayers size={14} /> Layer</span>
-                  <Select
-                    size="small"
-                    value={mapTiler.key || !['hybrid', 'satellite', 'streets'].includes(layer) ? layer : 'osm'}
-                    onChange={(value) => {
-                      setToolMessage('');
-                      setLayer(value);
-                    }}
-                    options={mapLayerOptions.map(([value, label]) => ({ value, label }))}
-                    popupClassName="wqm-map-select-popup"
-                    getPopupContainer={(trigger) => trigger.parentElement}
-                    aria-label="Map imagery layer"
-                  />
+          <div className="cesium-map-hud">
+            <Card
+              className={`cesium-map-tools ${toolsOpen ? 'open' : 'collapsed'}`}
+              size="small"
+              aria-label="3D map tools"
+              title={(
+                <button
+                  type="button"
+                  className="cesium-tools-toggle"
+                  onClick={() => setToolsOpen((open) => !open)}
+                  aria-expanded={toolsOpen}
+                  title={toolsOpen ? 'Collapse layer tools' : 'Expand layer tools'}
+                >
+                  <span><AppstoreOutlined /> Layer Tools</span>
+                  {toolsOpen ? <IcoChevronDown size={13} /> : <IcoChevronRight size={13} />}
+                </button>
+              )}
+            >
+              {toolsOpen && (
+                <div className="cesium-tools-body">
+                  <div className="cesium-layer-field">
+                    <span><IcoLayers size={14} /> Layer</span>
+                    <Select
+                      size="small"
+                      value={mapTiler.key || !['hybrid', 'satellite', 'streets'].includes(layer) ? layer : 'osm'}
+                      onChange={(value) => {
+                        setToolMessage('');
+                        setLayer(value);
+                      }}
+                      options={mapLayerOptions.map(([value, label]) => ({ value, label }))}
+                      popupClassName="wqm-map-select-popup"
+                      getPopupContainer={(trigger) => trigger.parentElement}
+                      aria-label="Map imagery layer"
+                    />
+                  </div>
+                  <Space className="cesium-tool-grid" size={[6, 6]} wrap>
+                    <Tooltip title={labelsEnabled ? 'Hide labels' : 'Show labels'}>
+                      <Button size="small" icon={<EyeOutlined />} type={labelsEnabled ? 'primary' : 'default'} onClick={() => setLabelsEnabled((show) => !show)}>
+                        Labels
+                      </Button>
+                    </Tooltip>
+                    <Tooltip title="Toggle terrain elevation">
+                      <Button size="small" icon={<CompassOutlined />} type={terrainEnabled ? 'primary' : 'default'} onClick={toggleTerrain} loading={terrainLoading}>
+                        Terrain
+                      </Button>
+                    </Tooltip>
+                    <Tooltip title="Toggle 3D buildings">
+                      <Button size="small" icon={<BankOutlined />} type={buildingsEnabled ? 'primary' : 'default'} onClick={toggleBuildings} loading={buildingsLoading}>
+                        Buildings
+                      </Button>
+                    </Tooltip>
+                    <Tooltip title="Focus stations">
+                      <Button size="small" icon={<AimOutlined />} onClick={() => focusStationBounds(viewerRef.current, safeLocations, 0.45, birdseye)}>
+                        Focus
+                      </Button>
+                    </Tooltip>
+                  </Space>
                 </div>
-                <Space className="cesium-tool-grid" size={[6, 6]} wrap>
-                  <Tooltip title={labelsEnabled ? 'Hide labels' : 'Show labels'}>
-                    <Button size="small" icon={<EyeOutlined />} type={labelsEnabled ? 'primary' : 'default'} onClick={() => setLabelsEnabled((show) => !show)}>
-                      Labels
-                    </Button>
-                  </Tooltip>
-                  <Tooltip title="Toggle terrain elevation">
-                    <Button size="small" icon={<CompassOutlined />} type={terrainEnabled ? 'primary' : 'default'} onClick={toggleTerrain} loading={terrainLoading}>
-                      Terrain
-                    </Button>
-                  </Tooltip>
-                  <Tooltip title="Toggle 3D buildings">
-                    <Button size="small" icon={<BankOutlined />} type={buildingsEnabled ? 'primary' : 'default'} onClick={toggleBuildings} loading={buildingsLoading}>
-                      Buildings
-                    </Button>
-                  </Tooltip>
-                  <Tooltip title="Focus stations">
-                    <Button size="small" icon={<AimOutlined />} onClick={() => focusStationBounds(viewerRef.current, safeLocations, 0.45, birdseye)}>
-                      Focus
-                    </Button>
-                  </Tooltip>
-                </Space>
-              </div>
-            )}
-          </Card>
-          <div className={`cesium-elevation-badge ${toolsOpen ? 'tools-open' : 'tools-collapsed'}`}>
-            <span>Elevation</span>
-            <strong>{cameraElevation === null ? '--' : `${fmt(cameraElevation)} m`}</strong>
+              )}
+            </Card>
+            <div className="cesium-elevation-badge">
+              <span>Elevation</span>
+              <strong>{cameraElevation === null ? '--' : `${fmt(cameraElevation)} m`}</strong>
+            </div>
           </div>
+          <div ref={mountRef} className="cesium-station-map-canvas" />
           {selectedLocation && (
             <Card
               className={`cesium-station-card status-${selectedStatus}`}

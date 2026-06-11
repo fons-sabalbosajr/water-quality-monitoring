@@ -11,6 +11,7 @@ const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const Welcome = lazy(() => import('./pages/Welcome'));
 const Home = lazy(() => import('./pages/Home'));
+const PublicDashboard = lazy(() => import('./pages/PublicDashboard'));
 
 const AppLoading = () => (
   <div className="app-loading" role="status" aria-live="polite">
@@ -63,6 +64,7 @@ function App() {
                 <Route path="/register" element={<Register />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
                 <Route path="/reset-password/:token" element={<ResetPassword />} />
+                <Route path="/public-dashboard" element={<PublicDashboard />} />
                 <Route
                   path="/dashboard"
                   element={

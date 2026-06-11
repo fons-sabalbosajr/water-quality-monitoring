@@ -437,7 +437,7 @@
 }
 
 .welcome-tablet-screen {
-  right: 0;
+  left: 0;
   bottom: 0;
   width: min(340px, 62%);
   min-height: 252px;
@@ -563,6 +563,16 @@
 .welcome-map-note-action {
   margin-top: auto;
   text-decoration: none;
+  color: var(--welcome-blue);
+  border: 1px solid var(--welcome-blue);
+  padding: 0.62rem 0.9rem;
+  border-radius: 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: background 0.3s, color 0.3s;
+
 }
 
 .welcome-hero-cards,
@@ -1066,6 +1076,126 @@
   to { transform: rotate(-402deg) scaleX(1.08); }
 }
 
+/* ── Device swap — map on bigger screen ── */
+
+.welcome-tablet-dashboard {
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
+.welcome-tablet-dashboard .welcome-screen-layout {
+  min-height: 216px;
+}
+
+.welcome-hero-map-full {
+  min-height: 355px;
+  border-radius: 0;
+  border: 0;
+}
+
+/* ── Water wave animation ── */
+
+.welcome-water-waves {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 130px;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.welcome-wave {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.welcome-wave-a {
+  fill: rgba(68, 106, 203, 0.22);
+  animation: welcomeWaveA 14s ease-in-out infinite;
+}
+
+.welcome-wave-b {
+  fill: rgba(124, 182, 117, 0.16);
+  animation: welcomeWaveB 20s ease-in-out infinite;
+}
+
+.welcome-wave-c {
+  fill: rgba(245, 158, 11, 0.10);
+  animation: welcomeWaveC 26s ease-in-out infinite;
+}
+
+@keyframes welcomeWaveA {
+  0%, 100% { transform: scaleY(1) translateX(0); }
+  33% { transform: scaleY(1.14) translateX(2.5%); }
+  66% { transform: scaleY(0.9) translateX(-2%); }
+}
+
+@keyframes welcomeWaveB {
+  0%, 100% { transform: scaleY(0.94) translateX(0); }
+  50% { transform: scaleY(1.10) translateX(-3.5%); }
+}
+
+@keyframes welcomeWaveC {
+  0%, 100% { transform: scaleY(1) translateX(0); }
+  40% { transform: scaleY(1.18) translateX(4%); }
+  80% { transform: scaleY(0.85) translateX(-1.5%); }
+}
+
+/* ── Scroll-triggered entrance animations ── */
+
+.welcome-animate {
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity 0.65s ease, transform 0.65s ease;
+}
+
+.welcome-animate.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.welcome-feature-card:nth-child(1).welcome-animate { transition-delay: 0ms; }
+.welcome-feature-card:nth-child(2).welcome-animate { transition-delay: 90ms; }
+.welcome-feature-card:nth-child(3).welcome-animate { transition-delay: 180ms; }
+.welcome-feature-card:nth-child(4).welcome-animate { transition-delay: 270ms; }
+
+.welcome-ai-uses .welcome-animate:nth-child(1) { transition-delay: 0ms; }
+.welcome-ai-uses .welcome-animate:nth-child(2) { transition-delay: 90ms; }
+.welcome-ai-uses .welcome-animate:nth-child(3) { transition-delay: 180ms; }
+.welcome-ai-uses .welcome-animate:nth-child(4) { transition-delay: 270ms; }
+
+.welcome-menu-grid .welcome-animate:nth-child(1) { transition-delay: 0ms; }
+.welcome-menu-grid .welcome-animate:nth-child(2) { transition-delay: 110ms; }
+
+.welcome-use-list .welcome-animate:nth-child(1) { transition-delay: 0ms; }
+.welcome-use-list .welcome-animate:nth-child(2) { transition-delay: 80ms; }
+.welcome-use-list .welcome-animate:nth-child(3) { transition-delay: 160ms; }
+.welcome-use-list .welcome-animate:nth-child(4) { transition-delay: 240ms; }
+
+.welcome-feature-card:hover,
+.welcome-hero-card:hover,
+.welcome-menu-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 28px 56px rgba(16, 31, 67, 0.18);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.welcome-nav-publink {
+  border-radius: 0.45rem;
+  padding: 0.7rem 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: rgba(124, 182, 117, 0.22);
+  color: #ddf8da !important;
+  border: 1px solid rgba(124, 182, 117, 0.38);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .welcome-hero::after,
   .welcome-primary-action,
@@ -1075,8 +1205,16 @@
   .welcome-screen-chart .bar,
   .ai-logo-core,
   .orbit-one,
-  .orbit-two {
+  .orbit-two,
+  .welcome-wave-a,
+  .welcome-wave-b,
+  .welcome-wave-c {
     animation: none;
+  }
+  .welcome-animate {
+    opacity: 1;
+    transform: none;
+    transition: none;
   }
 }
 
