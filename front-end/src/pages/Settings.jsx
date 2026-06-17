@@ -397,6 +397,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     () => getReadableStations(selectedSheet),
     [selectedSheet],
   );
+  const stationPagination = usePaginatedRows(selectedStations, 10);
   const current = settings[selectedWaterbody?.key] || {};
   const stationAssignments = current.stationAssignments || {};
   const stationOverrides = current.stationOverrides || {};
@@ -604,7 +605,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
                 </tr>
               </thead>
               <tbody>
-                {selectedStations.map((station) => {
+                {stationPagination.rows.map((station) => {
                   const assignmentKey = getStationAssignmentKey(
                     selectedWaterbody.key,
                     station,
@@ -722,6 +723,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
               </tbody>
             </table>
           </div>
+          <TablePagination pagination={stationPagination} label="Stations" />
         </div>
       )}
     </div>

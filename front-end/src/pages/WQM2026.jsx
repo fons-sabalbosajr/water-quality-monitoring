@@ -694,7 +694,7 @@ const WQM2026 = ({ year = 2026 }) => {
             columns={columns}
             dataSource={stationRows}
             scroll={{ x: 1040, y: 'calc(100vh - 350px)' }}
-            pagination={{ pageSize: 14, showSizeChanger: true, pageSizeOptions: [10, 14, 25, 50] }}
+            pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 25, 50, 100] }}
           />
         </Content>
         )}
@@ -751,7 +751,7 @@ const WQM2026 = ({ year = 2026 }) => {
         onOk={saveNewWaterbody}
         okText="Add Waterbody"
         okButtonProps={{ type: 'primary', disabled: !waterbodyDraft?.name?.trim() }}
-        width={480}
+        width={700}
         destroyOnHidden
       >
         {waterbodyDraft && (

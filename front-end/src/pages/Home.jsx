@@ -65,6 +65,19 @@ const getWaterbodyMatches = (key, name) => {
 
 const getLocationIdPrefix = (key) => String(key || '').split('_')[0]?.slice(0, 3).toUpperCase();
 
+const getStationAssignmentKey = (waterbodyKey, station) => [
+  waterbodyKey,
+  station?.stnNo ?? '',
+  station?.stnId ?? '',
+  station?.address ?? '',
+].join('::');
+
+const parseCoordinateValue = (value) => {
+  if (value === '' || value === null || value === undefined) return NaN;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : NaN;
+};
+
 const isWaterbodyMatch = (location, matches) => {
   const river = normalizeForMatch(location.waterbodyRiver);
   const loc = normalizeForMatch(location.waterbodyLoc);
@@ -237,6 +250,9 @@ const DashboardView = () => {
   const [selectedObservationMonth, setSelectedObservationMonth] = useState('');
   const [mapStationFilter, setMapStationFilter] = useState('all');
   const [stationLocations, setStationLocations] = useState([]);
+  const [profileSettings, setProfileSettings] = useState(
+    () => encryptedStorage.getItem('wqms_waterbody_profile_settings') || {},
+  );
   const { theme } = useTheme();
   const activeWaterbodyKey = WATERBODIES.some((waterbody) => waterbody.key === selectedWaterbody)
     ? selectedWaterbody
@@ -319,6 +335,14 @@ const DashboardView = () => {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    const handler = (event) => {
+      setProfileSettings(event.detail || encryptedStorage.getItem('wqms_waterbody_profile_settings') || {});
+    };
+    window.addEventListener('wqms:waterbody-profile-settings', handler);
+    return () => window.removeEventListener('wqms:waterbody-profile-settings', handler);
+  }, []);
+
   const selectedLocations = useMemo(() => {
     const waterbodyMatches = getWaterbodyMatches(activeWaterbodyKey, selectedInfo?.name);
     const idPrefix = getLocationIdPrefix(activeWaterbodyKey);
@@ -331,24 +355,60 @@ const DashboardView = () => {
         || stationName.includes(workbookStation)
       ));
     };
-    const matchedByRiver = stationLocations
+
+    let workbookLocations = stationLocations
       .filter((location) => isWaterbodyMatch(location, waterbodyMatches))
       .filter(stationMatches);
 
-    if (matchedByRiver.length) return matchedByRiver;
-
-    const matchedByIdPrefix = stationLocations.filter((location) => (
-      idPrefix && String(location.id || '').toUpperCase().startsWith(`${idPrefix}_`)
-    ));
-    if (matchedByIdPrefix.length) return matchedByIdPrefix;
-
-    return stationLocations.filter((location) => {
-      const workbookStation = normalizeForMatch(location.station);
-      return stationNames.some((stationName) => stationName && (
-        workbookStation.includes(stationName) || stationName.includes(workbookStation)
+    if (!workbookLocations.length) {
+      workbookLocations = stationLocations.filter((location) => (
+        idPrefix && String(location.id || '').toUpperCase().startsWith(`${idPrefix}_`)
       ));
-    });
-  }, [activeWaterbodyKey, selectedInfo?.name, stationLocations, stations]);
+    }
+
+    if (!workbookLocations.length) {
+      workbookLocations = stationLocations.filter((location) => {
+        const workbookStation = normalizeForMatch(location.station);
+        return stationNames.some((stationName) => stationName && (
+          workbookStation.includes(stationName) || stationName.includes(workbookStation)
+        ));
+      });
+    }
+
+    // Also include stations whose coordinates were manually saved in Settings
+    // but have no matching row in the workbook.
+    const profile = profileSettings[activeWaterbodyKey] || {};
+    const overrides = profile.stationOverrides || {};
+    const workbookNames = new Set(
+      workbookLocations.map((loc) => normalizeForMatch(loc.station)).filter(Boolean),
+    );
+    const synthetic = stations
+      .map((station) => {
+        const assignmentKey = getStationAssignmentKey(activeWaterbodyKey, station);
+        const override = overrides[assignmentKey];
+        if (!override) return null;
+        const lat = parseCoordinateValue(override.lat);
+        const lng = parseCoordinateValue(override.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+        const stationName = String(override.name || station.stnId || '');
+        if (workbookNames.has(normalizeForMatch(stationName))) return null;
+        const address = String(override.address || station.address || '');
+        const addressParts = address.split(',');
+        return {
+          id: assignmentKey,
+          station: stationName,
+          waterbodyRiver: selectedInfo?.name || '',
+          waterbodyLoc: '',
+          barangay: addressParts[0]?.trim() || '',
+          province: addressParts[addressParts.length - 1]?.trim() || '',
+          lat,
+          lng,
+        };
+      })
+      .filter(Boolean);
+
+    return [...workbookLocations, ...synthetic];
+  }, [activeWaterbodyKey, selectedInfo?.name, stationLocations, stations, profileSettings]);
 
   const activeMapStationFilter = mapStationFilter === 'all'
     || selectedLocations.some((location) => String(location.id) === mapStationFilter)

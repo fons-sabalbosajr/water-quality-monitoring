@@ -29,7 +29,10 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    encryptedStorage.clearAll();
+    // Only remove the user auth token; preserve app-wide settings
+    // (forecast horizon, waterbody profiles, access settings, drafts, etc.)
+    // so they survive across logout/login cycles.
+    encryptedStorage.removeItem(STORAGE_KEY);
     setUser(null);
   };
 
