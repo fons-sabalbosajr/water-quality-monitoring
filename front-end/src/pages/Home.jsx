@@ -18,7 +18,7 @@ import {
   IcoDashboard, IcoTable, IcoWater, IcoSettings,
   IcoChevronDown, IcoChevronRight, IcoCalendar,
   IcoSun, IcoMoon, IcoLogout, IcoMapPin,
-  IcoWaves, IcoBoat, IcoAlertTriangle, IcoCheckCircle, IcoEye,
+  IcoWaves, IcoBoat, IcoAlertTriangle, IcoCheckCircle, IcoEye, IcoMenu,
 } from '../components/Icons';
 import {
   MONTHS_SHORT, PARAM_LIMITS, PARAM_ORDER, fmt, fmtWithUnit, getAvailableParams,
@@ -724,6 +724,7 @@ const Home = () => {
   const userMenuRef = useRef(null);
 
   const [activeView, setActiveView] = useState('dashboard');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tabularOpen, setTabularOpen] = useState(false);
   const [waterbodiesOpen, setWaterbodiesOpen] = useState(false);
   const [visualizationsOpen, setVisualizationsOpen] = useState(false);
@@ -807,8 +808,20 @@ const Home = () => {
 
   return (
     <div className="dashboard">
+      {/* ── Mobile sidebar backdrop ── */}
+      {sidebarOpen && (
+        <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+      )}
       {/* ── Sidebar ── */}
-      <aside className="sidebar">
+      <aside
+        className={`sidebar${sidebarOpen ? ' sidebar-mobile-open' : ''}`}
+        onClick={(e) => {
+          if (window.innerWidth <= 480 && (
+            e.target.closest('button.nav-item')
+            || e.target.closest('.theme-toggle-sidebar')
+          )) setSidebarOpen(false);
+        }}
+      >
         <div className="sidebar-brand">
           <div className="sidebar-logos">
             <img src={bagongLogo} alt="Bagong Pilipinas" className="logo-bagong" />
@@ -950,13 +963,11 @@ const Home = () => {
                   {[
                     ['accounts', 'User Accounts'],
                     ['approvals', 'Sign Up Approvals'],
-                    ['runtime', 'App Runtime Status'],
-                    ['database', 'Database Status'],
+                    ['runtime', 'Runtime & Database'],
                     ['waterbody-settings', 'Waterbody Profiles'],
                     ['visualization-data', 'Visualization Data'],
                     ['logs', 'App Logs'],
-                    ['backup', 'Backup & Config'],
-                    ['email', 'Email Config'],
+                    ['backup', 'Backup & Email Config'],
                     ['ai', 'AI Forecast'],
                   ].map(([section, label]) => (
                     <button
@@ -993,6 +1004,13 @@ const Home = () => {
       <main className="main-content">
         {!hideTopbar && <header className={`topbar${activeView === 'dashboard' ? ' dashboard-header' : ''}`}>
           <div className="topbar-left">
+            <button
+              className="sidebar-hamburger"
+              onClick={() => setSidebarOpen((v) => !v)}
+              aria-label="Toggle navigation"
+            >
+              <IcoMenu size={20} />
+            </button>
             <h2 className="page-title">{pageTitle}</h2>
             <p className="page-subtitle">EMBR3 Water Quality Monitoring System &middot; Region III</p>
           </div>

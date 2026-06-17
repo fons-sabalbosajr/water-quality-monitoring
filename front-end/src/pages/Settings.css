@@ -506,6 +506,21 @@
   gap: 0.45rem;
 }
 
+.coord-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+}
+
+.coord-field > span {
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
 .station-coordinate-fields input {
   width: 100%;
   font-variant-numeric: tabular-nums;
@@ -883,6 +898,19 @@
 .backup-panel {
   display: grid;
   gap: 0.9rem;
+}
+
+.logs-table {
+  font-size: 0.75rem;
+}
+
+.logs-table th {
+  font-size: 0.65rem;
+}
+
+.logs-table td {
+  font-size: 0.73rem;
+  padding: 0.6rem 1rem;
 }
 
 .logs-table code {

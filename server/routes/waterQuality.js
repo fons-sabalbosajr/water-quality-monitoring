@@ -122,6 +122,39 @@ router.post('/wqm/:year/import', protect, async (req, res) => {
   }
 });
 
+// @route   PUT /api/water/wqm/:year
+// @desc    Officially save updated WQM sheets to MongoDB (admin/developer only)
+// @access  Private — admin or developer
+const { adminProtect } = require('../middleware/adminMiddleware');
+
+router.put('/wqm/:year', protect, adminProtect, async (req, res) => {
+  const year = Number(req.params.year);
+  if (!IMPORTED_WQM_YEARS.includes(year)) {
+    return res.status(400).json({ message: `Only WQM years ${IMPORTED_WQM_YEARS.join(' and ')} can be updated via this endpoint.` });
+  }
+
+  const { sheets } = req.body || {};
+  if (!Array.isArray(sheets) || !sheets.length) {
+    return res.status(400).json({ message: 'A non-empty sheets array is required.' });
+  }
+
+  try {
+    const dataset = await WqmDataset.findOneAndUpdate(
+      { year },
+      { sheets, importedAt: new Date() },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    );
+    return res.json({
+      message: `WQM ${year} saved to MongoDB.`,
+      year,
+      importedAt: dataset.importedAt,
+      sheetCount: dataset.sheets.length,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || `Unable to save WQM ${year}.` });
+  }
+});
+
 router.get('/forecast/status', protect, (req, res) => {
   res.json({
     configured: Boolean(getGeminiKey()),

@@ -34,7 +34,7 @@ export const normalizeParamName = (param) => {
   const key = raw.toLowerCase().replace(/\s+/g, ' ');
 
   if (!raw) return null;
-  if (key.includes('observ')) return OBSERVATION_PARAM;
+  if (key.includes('observ') || key.includes('obserb')) return OBSERVATION_PARAM;
   if (key.startsWith('temp')) return 'Temp. (°C)';
   if (key.includes('bod')) return 'BOD (mg/L)';
   if (key.includes('oil')) return 'Oil and Grease';

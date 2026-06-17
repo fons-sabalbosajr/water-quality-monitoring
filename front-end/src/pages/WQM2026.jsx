@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Input, Layout, Modal, Popconfirm, Space, Table, Tag } from 'antd';
 import {
+  DownOutlined,
   DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, PlusOutlined,
   ReloadOutlined, SearchOutlined,
+  RightOutlined,
 } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import { useAuth } from '../context/AuthContext';
@@ -14,8 +16,8 @@ import {
   getParamUnit, normalizeParamName, OBSERVATION_PARAM, toNumber,
 } from '../utils/wqmData';
 import {
-  INITIAL_SHEETS, getStoredWqmSheets, resetStoredWqmSheets,
-  saveStoredWqmSheets,
+  INITIAL_SHEETS, WATERBODY_PROVINCE, buildWaterbodyOptions, getStoredWqmSheets,
+  groupWaterbodyByProvince, resetStoredWqmSheets, saveStoredWqmSheets,
 } from '../utils/wqmSheets';
 import './WQM2026.css';
 
@@ -84,7 +86,7 @@ const buildStationDraft = (station, params) => ({
 const WQM2026 = ({ year = 2026 }) => {
   const { user } = useAuth();
   const canManageData = ['admin', 'developer'].includes(user?.role);
-  const canEditYear = year === 2026 ? canManageData : user?.role === 'admin';
+  const canEditYear = canManageData;
   const hasStoredSheetsForYear = (year) => Boolean(encryptedStorage.getItem(getYearDraftKey(year)));
   const [sheets, setSheets] = useState(() => (year === 2026 ? getStoredSheetsForYear(year) : []));
   const [sourceSheets, setSourceSheets] = useState(() => (year === 2026 ? clone(INITIAL_SHEETS) : []));
@@ -95,6 +97,10 @@ const WQM2026 = ({ year = 2026 }) => {
   const [modalMode, setModalMode] = useState(null);
   const [editingStation, setEditingStation] = useState(null);
   const [stationDraft, setStationDraft] = useState(null);
+  const [collapsedProvinces, setCollapsedProvinces] = useState({});
+  const [waterbodyModalOpen, setWaterbodyModalOpen] = useState(false);
+  const [waterbodyDraft, setWaterbodyDraft] = useState(null);
+  const [waterbodyDraftError, setWaterbodyDraftError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -154,6 +160,51 @@ const WQM2026 = ({ year = 2026 }) => {
   const modalParams = useMemo(() => (sheet ? getAvailableParams(sheet.stations, true) : []), [sheet]);
   const periodLabels = sheet?.periodLabels?.length ? sheet.periodLabels : MONTHS_SHORT;
   const isReadOnlyModal = modalMode === 'view' || !canEditYear;
+  const waterbodyOptions = useMemo(() => buildWaterbodyOptions(sheets), [sheets]);
+  const provinceGroups = useMemo(() => groupWaterbodyByProvince(waterbodyOptions), [waterbodyOptions]);
+
+  // Sider groups use the raw sheets list (includes empty waterbodies the dev just created)
+  const siderGroups = useMemo(() => {
+    const grouped = new Map();
+    sheets.forEach((item) => {
+      const province = WATERBODY_PROVINCE[item.key] || 'Other';
+      if (!grouped.has(province)) grouped.set(province, []);
+      grouped.get(province).push(item);
+    });
+    return [...grouped.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([province, items]) => ({
+        province,
+        items: [...items].sort((a, b) => a.name.localeCompare(b.name)),
+      }));
+  }, [sheets]);
+
+  useEffect(() => {
+    setCollapsedProvinces((current) => {
+      const next = { ...current };
+      let changed = false;
+      provinceGroups.forEach(({ province }) => {
+        if (!(province in next)) {
+          next[province] = false;
+          changed = true;
+        }
+      });
+      Object.keys(next).forEach((province) => {
+        if (!provinceGroups.some((group) => group.province === province)) {
+          delete next[province];
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+  }, [provinceGroups]);
+
+  const toggleProvinceGroup = (province) => {
+    setCollapsedProvinces((current) => ({
+      ...current,
+      [province]: !current[province],
+    }));
+  };
 
   const stationRows = useMemo(() => {
     if (!sheet) return [];
@@ -188,11 +239,18 @@ const WQM2026 = ({ year = 2026 }) => {
   const updateSheets = (updater, successMessage, logDetails) => {
     setSheets((current) => {
       const next = updater(clone(current));
-      saveStoredSheetsForYear(year, next);
+      if (year === 2026) {
+        saveStoredSheetsForYear(year, next);
+        if (successMessage) setMessage(successMessage);
+      } else {
+        // Official save to MongoDB for 2024/2025
+        api.put(`/water/wqm/${year}`, { sheets: next })
+          .then(() => setMessage(successMessage || `WQM ${year} saved to MongoDB.`))
+          .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`));
+      }
+      if (logDetails) logActivity(logDetails.action, logDetails.details, user);
       return next;
     });
-    if (successMessage) setMessage(successMessage);
-    if (logDetails) logActivity(logDetails.action, logDetails.details, user);
   };
 
   const openStationModal = (mode, station = null) => {
@@ -245,7 +303,9 @@ const WQM2026 = ({ year = 2026 }) => {
           ? item.stations.map((station) => (station.stnNo === editingStation.stnNo ? normalizedStation : station))
           : [...item.stations, normalizedStation],
       };
-    }), editingStation ? 'Station record updated.' : 'Station record added.', {
+    }), editingStation
+      ? (year === 2026 ? 'Station record updated.' : `Station updated and WQM ${year} saved to MongoDB.`)
+      : (year === 2026 ? 'Station record added.' : `Station added and WQM ${year} saved to MongoDB.`), {
       action: editingStation ? 'Updated station record' : 'Added station record',
       details: { waterbody: sheet.name, station: normalizedStation.stnId },
     });
@@ -270,20 +330,82 @@ const WQM2026 = ({ year = 2026 }) => {
       item.key === sheet.key
         ? { ...item, stations: item.stations.filter((entry) => entry.stnNo !== station.stnNo) }
         : item
-    )), 'Station removed from encrypted local draft.', {
+    )), year === 2026 ? 'Station removed from local draft.' : `Station removed and WQM ${year} saved to MongoDB.`, {
       action: 'Deleted station record',
       details: { waterbody: sheet.name, station: station.stnId },
     });
   };
 
   const resetDrafts = () => {
-    if (!canEditYear) return;
+    if (!canEditYear || year !== 2026) return;
     resetStoredSheetsForYear(year);
     setSheets(clone(sourceSheets));
     setActiveTab(sourceSheets[0]?.key || '');
     setSearch('');
-    setMessage(`Encrypted local ${year} draft reset to source dataset.`);
+    setMessage(`Local ${year} draft reset to source dataset.`);
     logActivity('Reset tabular draft data', { scope: `WQM ${year}` }, user);
+  };
+
+  const deleteWaterbody = () => {
+    if (!sheet || !canEditYear) return;
+    const next = sheets.filter((s) => s.key !== sheet.key);
+    if (year === 2026) {
+      saveStoredSheetsForYear(year, next);
+      setMessage(`"${sheet.name}" removed from the local WQM ${year} draft.`);
+    } else {
+      api.put(`/water/wqm/${year}`, { sheets: next })
+        .then(() => setMessage(`"${sheet.name}" removed and WQM ${year} saved to MongoDB.`))
+        .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`));
+    }
+    setSheets(next);
+    setActiveTab(next[0]?.key || '');
+    setSearch('');
+    logActivity('Deleted waterbody from tabular dataset', { waterbody: sheet.name, year }, user);
+  };
+
+  const openAddWaterbodyModal = () => {
+    setWaterbodyDraft({ key: '', name: '', classInfo: '' });
+    setWaterbodyDraftError('');
+    setWaterbodyModalOpen(true);
+  };
+
+  const saveNewWaterbody = () => {
+    if (!canEditYear || !waterbodyDraft?.name?.trim()) {
+      setWaterbodyDraftError('Name is required.');
+      return;
+    }
+    const derivedKey = (waterbodyDraft.key.trim() || waterbodyDraft.name.trim())
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    if (!derivedKey) {
+      setWaterbodyDraftError('Could not derive a valid key from the name. Try adding letters.');
+      return;
+    }
+    if (sheets.some((s) => s.key === derivedKey)) {
+      setWaterbodyDraftError(`A waterbody with key "${derivedKey}" already exists.`);
+      return;
+    }
+    const newSheet = {
+      key: derivedKey,
+      name: waterbodyDraft.name.trim(),
+      classInfo: waterbodyDraft.classInfo?.trim() || '',
+      stations: [],
+    };
+    const next = [...sheets, newSheet];
+    if (year === 2026) {
+      saveStoredSheetsForYear(year, next);
+      setMessage(`"${newSheet.name}" added to WQM ${year} dataset.`);
+    } else {
+      api.put(`/water/wqm/${year}`, { sheets: next })
+        .then(() => setMessage(`"${newSheet.name}" added and WQM ${year} saved to MongoDB.`))
+        .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`));
+    }
+    setSheets(next);
+    setActiveTab(derivedKey);
+    setWaterbodyModalOpen(false);
+    setWaterbodyDraft(null);
+    logActivity('Added new waterbody', { waterbody: newSheet.name, key: newSheet.key, year }, user);
   };
 
   const exportCSV = () => {
@@ -444,18 +566,46 @@ const WQM2026 = ({ year = 2026 }) => {
     <div className="wqm2026 ant-wqm2026">
       <Layout className="wqm-tabular-shell">
         <Sider className="wqm-sider" width={230}>
-          <div className="wqm-sider-title">Waterbodies</div>
-          <nav className="wqm-sider-menu" aria-label="Tabular result waterbodies">
-            {sheets.map((item) => (
+          <div className="wqm-sider-title">
+            Waterbodies
+            {canEditYear && (
               <button
                 type="button"
-                key={item.key}
-                className={item.key === sheet?.key ? 'active' : ''}
-                onClick={() => { setActiveTab(item.key); setSearch(''); }}
+                className="wqm-sider-add-btn"
+                onClick={openAddWaterbodyModal}
+                title="Add new waterbody"
+                aria-label="Add new waterbody"
               >
-                <span>{item.name}</span>
-                <small>{item.stations.length} stations</small>
+                +
               </button>
+            )}
+          </div>
+          <nav className="wqm-sider-menu" aria-label="Tabular result waterbodies">
+            {siderGroups.map(({ province, items }) => (
+              <div key={province} className="wqm-sider-province-group">
+                <button
+                  type="button"
+                  className={`wqm-sider-province-toggle${collapsedProvinces[province] ? ' is-collapsed' : ''}`}
+                  onClick={() => toggleProvinceGroup(province)}
+                  aria-expanded={!collapsedProvinces[province]}
+                >
+                  <span className="wqm-sider-province-label">{province}</span>
+                  <span className="wqm-sider-province-icon">
+                    {collapsedProvinces[province] ? <RightOutlined /> : <DownOutlined />}
+                  </span>
+                </button>
+                {!collapsedProvinces[province] && items.map((item) => (
+                  <button
+                    type="button"
+                    key={item.key}
+                    className={item.key === sheet?.key ? 'active' : ''}
+                    onClick={() => { setActiveTab(item.key); setSearch(''); }}
+                  >
+                    <span>{item.name}</span>
+                    <small>{item.stations?.length ?? 0} stations</small>
+                  </button>
+                ))}
+              </div>
             ))}
           </nav>
         </Sider>
@@ -486,7 +636,7 @@ const WQM2026 = ({ year = 2026 }) => {
                 {classLabel && <Tag color="blue">Class {classLabel}</Tag>}
                 <Tag color="green">{sheet.stations.length} stations</Tag>
                 <Tag color="default">{params.length} parameters</Tag>
-                {canEditYear ? <Tag color="gold">{year === 2026 ? (user?.role === 'developer' ? 'Developer CRUD' : 'Admin CRUD') : 'Admin Draft Editing'}</Tag> : <Tag>Read only</Tag>}
+                {canEditYear ? <Tag color="gold">{year === 2026 ? (user?.role === 'developer' ? 'Developer CRUD' : 'Admin CRUD') : (user?.role === 'developer' ? 'Developer — MongoDB' : 'Admin — MongoDB')}</Tag> : <Tag>Read only</Tag>}
               </Space>
             </div>
             <Space>
@@ -502,14 +652,27 @@ const WQM2026 = ({ year = 2026 }) => {
               {canEditYear && (
                 <>
                   <Button type="primary" icon={<PlusOutlined />} onClick={addStation}>Add Station</Button>
+                  {year === 2026 && (
+                    <Popconfirm
+                      title="Reset local draft?"
+                      description={`This restores the original WQM ${year} source data.`}
+                      okText="Reset"
+                      cancelText="Cancel"
+                      onConfirm={resetDrafts}
+                    >
+                      <Button icon={<ReloadOutlined />}>Reset Draft</Button>
+                    </Popconfirm>
+                  )}
                   <Popconfirm
-                    title="Reset encrypted local draft?"
-                    description={`This restores the original WQM ${year} source data.`}
-                    okText="Reset"
+                    title={`Delete "${sheet?.name}"?`}
+                    description={year === 2026 ? 'This removes the waterbody from the local draft.' : `This removes the waterbody and saves WQM ${year} to MongoDB.`}
+                    okText="Yes, delete"
+                    okButtonProps={{ danger: true }}
                     cancelText="Cancel"
-                    onConfirm={resetDrafts}
+                    onConfirm={deleteWaterbody}
+                    disabled={!sheet}
                   >
-                    <Button icon={<ReloadOutlined />}>Reset Draft</Button>
+                    <Button danger disabled={!sheet} icon={<DeleteOutlined />}>Delete Waterbody</Button>
                   </Popconfirm>
                 </>
               )}
@@ -520,7 +683,7 @@ const WQM2026 = ({ year = 2026 }) => {
             <div className="wqm-ant-note">
               {message || (year === 2026
                 ? 'Read-only mode. CRUD controls are restricted to administrators and developers.'
-                : 'Read-only mode. Only administrators can edit WQM 2024 and WQM 2025 local drafts.')}
+                : 'Read-only mode. Only administrators and developers can edit this dataset.')}
             </div>
           )}
 
@@ -576,6 +739,59 @@ const WQM2026 = ({ year = 2026 }) => {
               pagination={false}
               scroll={{ x: 1320, y: '58vh' }}
             />
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Add Waterbody Modal ── */}
+      <Modal
+        title="Add New Waterbody"
+        open={waterbodyModalOpen}
+        onCancel={() => { setWaterbodyModalOpen(false); setWaterbodyDraft(null); setWaterbodyDraftError(''); }}
+        onOk={saveNewWaterbody}
+        okText="Add Waterbody"
+        okButtonProps={{ type: 'primary', disabled: !waterbodyDraft?.name?.trim() }}
+        width={480}
+        destroyOnHidden
+      >
+        {waterbodyDraft && (
+          <div className="station-modal-grid" style={{ marginTop: '0.75rem' }}>
+            <label>
+              <span>Waterbody Name <span style={{ color: '#ef4444' }}>*</span></span>
+              <Input
+                autoFocus
+                value={waterbodyDraft.name}
+                placeholder="e.g. Pasig River"
+                onChange={(event) => {
+                  const name = event.target.value;
+                  const derivedKey = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+                  setWaterbodyDraft((d) => ({ ...d, name, key: derivedKey }));
+                  setWaterbodyDraftError('');
+                }}
+              />
+            </label>
+            <label>
+              <span>Key (auto-generated, editable)</span>
+              <Input
+                value={waterbodyDraft.key}
+                placeholder="e.g. PASIG_RIVER"
+                onChange={(event) => {
+                  setWaterbodyDraft((d) => ({ ...d, key: event.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '') }));
+                  setWaterbodyDraftError('');
+                }}
+              />
+            </label>
+            <label className="station-address-field">
+              <span>Class Info (optional)</span>
+              <Input
+                value={waterbodyDraft.classInfo}
+                placeholder="e.g. CLASS C (3 STATIONS)"
+                onChange={(event) => setWaterbodyDraft((d) => ({ ...d, classInfo: event.target.value }))}
+              />
+            </label>
+            {waterbodyDraftError && (
+              <p style={{ color: '#ef4444', fontSize: '0.8rem', margin: 0 }}>{waterbodyDraftError}</p>
+            )}
           </div>
         )}
       </Modal>

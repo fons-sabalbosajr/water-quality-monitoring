@@ -121,6 +121,17 @@ const STATUS_TAG = {
   alert: "error",
   nodata: "default",
 };
+const HEADER_DATE_FORMATTER = new Intl.DateTimeFormat("en-PH", {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
+const HEADER_TIME_FORMATTER = new Intl.DateTimeFormat("en-PH", {
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
 
 /* ── K-format for large values (chips) ── */
 const fmtK = (value) => {
@@ -2559,6 +2570,7 @@ const PubFooter = ({ year }) => (
 const PublicDashboard = () => {
   const { theme, toggle } = useTheme();
   const isDark = theme === "dark";
+  const [currentDateTime, setCurrentDateTime] = useState(() => new Date());
   const [collapsed, setCollapsed] = useState(false);
   const [menuKey, setMenuKey] = useState("dashboard");
   const { year, sheets, loading, error } = usePublishedWqmDataset();
@@ -2590,6 +2602,11 @@ const PublicDashboard = () => {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setCurrentDateTime(new Date()), 1000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   const menuItems = [
@@ -2625,6 +2642,11 @@ const PublicDashboard = () => {
         </div>
         <div className="pub-header-actions">
           {/* <span className="pub-header-badge">Public Dashboard {year}</span> */}
+          <div className="pub-header-datetime" aria-live="polite">
+            <span className="pub-header-datetime-label">Philippine Time</span>
+            <span className="pub-header-datetime-time">{HEADER_TIME_FORMATTER.format(currentDateTime)}</span>
+            <span className="pub-header-datetime-date">{HEADER_DATE_FORMATTER.format(currentDateTime)}</span>
+          </div>
           <Button
             type="text"
             icon={isDark ? <SunOutlined /> : <MoonOutlined />}

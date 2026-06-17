@@ -19,6 +19,7 @@
   left: 0;
   bottom: 0;
   z-index: 100;
+  overflow: hidden;
 }
 
 .sidebar-brand {
@@ -81,19 +82,34 @@
 .sidebar-nav {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.18rem;
   flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  padding-right: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.sidebar-nav::-webkit-scrollbar { width: 4px; }
+.sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+.sidebar-nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+}
+.sidebar-nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.38);
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  padding: 0.65rem 0.75rem;
+  gap: 0.6rem;
+  padding: 0.52rem 0.75rem;
   border-radius: 0.6rem;
   color: rgba(255, 255, 255, 0.70);
   text-decoration: none;
-  font-size: 0.875rem;
+  font-size: 0.8rem;
   font-weight: 500;
   transition: background 0.15s, color 0.15s;
   border: none;
@@ -152,8 +168,8 @@
 }
 
 .nav-sub-item {
-  font-size: 0.83rem;
-  padding: 0.5rem 0.75rem;
+  font-size: 0.74rem;
+  padding: 0.38rem 0.75rem;
   color: rgba(255,255,255,0.6);
 }
 
@@ -177,15 +193,11 @@
   background: #7CB675;
 }
 
-/* Waterbodies list — scrollable */
+/* Waterbodies list — inherit scrolling from the whole sider */
 .nav-wb-group {
-  max-height: 40vh;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.15) transparent;
+  max-height: none;
+  overflow: visible;
 }
-.nav-wb-group::-webkit-scrollbar { width: 3px; }
-.nav-wb-group::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
 
 .nav-badge-admin {
   font-size: 0.6rem;
@@ -688,38 +700,171 @@ tbody tr:hover {
   margin: 0;
 }
 
+/* ── Sidebar hamburger (mobile only) ── */
+.sidebar-hamburger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 0.35rem;
+  border-radius: 0.45rem;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.sidebar-hamburger:hover { background: var(--row-hover); }
+
+/* ── Mobile sidebar backdrop ── */
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.46);
+  z-index: 99;
+}
+
 /* ── Responsive ── */
+@media (max-width: 1024px) {
+  .main-content {
+    padding: 1.25rem 1.25rem;
+  }
+  .topbar {
+    padding: 0.75rem 1.1rem;
+  }
+  .page-title {
+    font-size: 1.3rem;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .overview-hero {
+    padding: 1.5rem;
+    gap: 1rem;
+  }
+}
+
 @media (max-width: 768px) {
   .sidebar {
-    width: 64px;
+    width: 60px;
     padding: 1rem 0.5rem;
   }
   .sidebar-brand-text,
   .sidebar-brand-name,
   .sidebar-brand-sub,
   .nav-item span:not(.nav-icon),
+  .nav-chevron-icon,
   .logout-btn span:last-child {
     display: none;
   }
+  .nav-sub-group {
+    padding-left: 0.25rem;
+  }
   .sidebar-logos img,
   .sidebar-logos svg {
-    height: 28px;
+    height: 26px;
   }
   .sidebar-logo-divider {
     display: none;
   }
   .nav-item {
     justify-content: center;
-    padding: 0.65rem;
+    padding: 0.6rem;
   }
   .logout-btn {
     justify-content: center;
-    padding: 0.65rem;
+    padding: 0.6rem;
   }
   .main-content {
-    margin-left: 64px;
-    padding: 1rem;
+    margin-left: 60px;
+    padding: 0.85rem;
   }
+  .topbar {
+    padding: 0.65rem 0.85rem;
+    gap: 0.65rem;
+  }
+  .page-title { font-size: 1.15rem; }
+  .page-subtitle { display: none; }
+  .last-updated { display: none; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .overview-hero { flex-direction: column; align-items: flex-start; }
+  .overview-hero-actions { flex-wrap: wrap; gap: 0.5rem; }
+  .dashboard-summary-strip { grid-template-columns: 1fr 1fr; }
+  .app-footer { flex-direction: column; gap: 0.25rem; font-size: 0.72rem; }
+}
+
+@media (max-width: 480px) {
+  /* Sidebar becomes full off-canvas overlay on phones */
+  .sidebar {
+    width: 220px;
+    padding: 1rem 0.75rem;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    z-index: 110;
+  }
+  .sidebar.sidebar-mobile-open {
+    transform: translateX(0);
+  }
+  .sidebar-backdrop {
+    display: block;
+  }
+  /* Restore sidebar text and nav labels on the open overlay */
+  .sidebar.sidebar-mobile-open .sidebar-brand-text,
+  .sidebar.sidebar-mobile-open .sidebar-brand-name,
+  .sidebar.sidebar-mobile-open .sidebar-brand-sub,
+  .sidebar.sidebar-mobile-open .nav-item span:not(.nav-icon),
+  .sidebar.sidebar-mobile-open .nav-chevron-icon {
+    display: flex;
+  }
+  .sidebar.sidebar-mobile-open .sidebar-brand-name,
+  .sidebar.sidebar-mobile-open .sidebar-brand-sub {
+    display: block;
+  }
+  .sidebar.sidebar-mobile-open .nav-item {
+    justify-content: flex-start;
+    padding: 0.52rem 0.75rem;
+  }
+  .sidebar.sidebar-mobile-open .nav-sub-group {
+    padding-left: 0.75rem;
+  }
+  /* Hamburger visible on mobile */
+  .sidebar-hamburger { display: flex; }
+  /* Main content full width */
+  .main-content {
+    margin-left: 0;
+    padding: 0.65rem 0.65rem;
+  }
+  .topbar {
+    padding: 0.55rem 0.65rem;
+    border-radius: 0.65rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
+  }
+  .page-title {
+    font-size: 1rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .topbar-right { flex: 0 0 auto; }
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+  .stat-card { padding: 0.85rem 0.75rem; gap: 0.65rem; }
+  .stat-value { font-size: 1.4rem; }
+  .overview-hero { padding: 1.2rem; }
+  .overview-title { font-size: 1.2rem; }
+  .dashboard-summary-strip { grid-template-columns: 1fr; }
+  .dashboard-controls { grid-template-columns: 1fr; }
+  .table-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+  .guide-grid { grid-template-columns: 1fr; }
 }
 
 /* ── Dashboard Overview ── */

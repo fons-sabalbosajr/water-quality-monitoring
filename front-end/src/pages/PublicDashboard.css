@@ -125,6 +125,46 @@
   white-space: nowrap;
 }
 
+.pub-header-datetime {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.02rem;
+  min-width: 10.75rem;
+  padding: 0.45rem 0.85rem 0.42rem;
+  border-radius: 1.15rem;
+  border: 1px solid rgba(124, 182, 117, 0.2);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+    radial-gradient(circle at top left, rgba(124, 182, 117, 0.18), transparent 58%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 22px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+}
+
+.pub-header-datetime-label {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.pub-header-datetime-time {
+  color: #ffffff;
+  font-size: 0.92rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.08;
+}
+
+.pub-header-datetime-date {
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1.15;
+}
+
 .pub-theme-btn { color: rgba(255,255,255,0.82) !important; }
 .pub-theme-btn:hover { color: #fff !important; background: rgba(255,255,255,0.12) !important; }
 
@@ -712,6 +752,11 @@
 @media (max-width: 768px) {
   .pub-header-org { display: none; }
   .pub-header-badge { display: none; }
+  .pub-header-datetime {
+    min-width: 9.5rem;
+    padding-inline: 0.7rem;
+  }
+  .pub-header-datetime-time { font-size: 0.84rem; }
   .pub-logo-bp { display: none; }
   .pub-content-inner { padding: 0.75rem 0.65rem; }
   .pub-view-head { flex-direction: column; align-items: stretch; }
@@ -726,6 +771,7 @@
 
 @media (max-width: 576px) {
   .pub-header-name { font-size: 0.78rem; }
+  .pub-header-datetime { display: none; }
   .pub-param-grid { grid-template-columns: repeat(2, 1fr); }
   .pub-kpi-row { gap: 8px !important; }
   .pub-view-head .pub-view-title { font-size: 1rem !important; }

@@ -538,12 +538,39 @@
 }
 
 .wqm-sider-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 0.9rem 0.9rem 0.55rem;
   color: var(--text-secondary);
   font-size: 0.68rem;
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.wqm-sider-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 0.35rem;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.wqm-sider-add-btn:hover {
+  background: #446ACB;
+  border-color: #446ACB;
+  color: #fff;
 }
 
 .wqm-sider-menu {
@@ -555,33 +582,92 @@
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
+.wqm-sider-menu::-webkit-scrollbar { width: 4px; }
+.wqm-sider-menu::-webkit-scrollbar-track { background: transparent; }
+.wqm-sider-menu::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.wqm-sider-menu::-webkit-scrollbar-thumb:hover { background: #446ACB66; }
 
-.wqm-sider-menu button {
+.wqm-sider-province-group {
+  margin-top: 0.35rem;
+}
+
+.wqm-sider-province-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: 0;
+  border-radius: 0.42rem;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.52rem 0.65rem 0.32rem;
+  text-align: left;
+  margin-top: 0.25rem;
+  transition: background 0.12s;
+}
+
+.wqm-sider-province-toggle:hover {
+  background: rgba(68, 106, 203, 0.08);
+}
+
+.wqm-sider-province-label {
+  font-size: 0.6rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  margin: 0;
+  opacity: 0.85;
+  user-select: none;
+}
+
+.wqm-sider-province-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 0.6rem;
+  opacity: 0.7;
+}
+
+.wqm-sider-province-group {
+  margin-top: 0.1rem;
+  padding-bottom: 0.15rem;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+
+.wqm-sider-province-group:last-child {
+  border-bottom: 0;
+}
+
+/* Only waterbody buttons (not the province toggle) get the card styling */
+.wqm-sider-menu .wqm-sider-province-group > button:not(.wqm-sider-province-toggle) {
   display: grid;
   gap: 0.16rem;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: 0.55rem;
+  border-radius: 0.42rem;
   background: transparent;
   color: var(--text-primary);
   cursor: pointer;
-  padding: 0.58rem 0.65rem;
+  padding: 0.45rem 0.75rem;
   text-align: left;
+  transition: background 0.12s, border-color 0.12s;
 }
 
-.wqm-sider-menu button:hover {
+.wqm-sider-menu .wqm-sider-province-group > button:not(.wqm-sider-province-toggle):hover {
   border-color: var(--border);
   background: var(--bg-card);
 }
 
-.wqm-sider-menu button.active {
+.wqm-sider-menu .wqm-sider-province-group > button.active:not(.wqm-sider-province-toggle) {
   border-color: #446ACB;
   background: rgba(68,106,203,0.12);
 }
 
 .wqm-sider-menu span {
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -589,7 +675,7 @@
 .wqm-sider-menu small {
   color: var(--text-secondary);
   font-size: 0.62rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .wqm-ant-panel {

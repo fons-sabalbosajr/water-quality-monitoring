@@ -36,6 +36,41 @@ export const WQM_WATERBODY_GROUPS = [
   },
 ];
 
+export const WATERBODY_PROVINCE = {
+  BALER_BAY: 'Aurora',
+  PUDOC_RIVER: 'Aurora',
+  BATAAN_COAST: 'Bataan',
+  BATHING_BEACHES: 'Bataan',
+  JUNESS: 'Bataan',
+  MONTEMAR_BC: 'Bataan',
+  TALISAY_RIVER: 'Bataan',
+  MOUTH_OF_TALISAY: 'Bataan',
+  ANGAT_R4L: 'Bulacan',
+  ATLAG: 'Bulacan',
+  BOCAUE: 'Bulacan',
+  BULACAN_COAST: 'Bulacan',
+  HAGONOY: 'Bulacan',
+  LABANGAN: 'Bulacan',
+  MARILAO: 'Bulacan',
+  MEYCAUAYAN: 'Bulacan',
+  MOUTH_OF_OBANDO: 'Bulacan',
+  OBANDO: 'Bulacan',
+  SANTA_MARIA_RIVER: 'Bulacan',
+  TALAVERA_RIVER: 'Nueva Ecija',
+  PAMPANGA_UPSTREAM: 'Nueva Ecija',
+  ASFMSRS: 'Pampanga',
+  GUAGUA: 'Pampanga',
+  MOUTH_OF_PAMPANGA: 'Pampanga',
+  PALAKOL: 'Pampanga',
+  PAMPANGA_COAST: 'Pampanga',
+  PAMPANGA_RIVER: 'Pampanga',
+  LUCONG_RIVER: 'Tarlac',
+  BAGSIT: 'Zambales',
+  MASINLOC_OYON_BAY: 'Zambales',
+  SUBIC_BAY: 'Zambales',
+  'ZAMBALES BAY': 'Zambales',
+};
+
 const WATERBODY_GROUP_LOOKUP = WQM_WATERBODY_GROUPS.reduce((lookup, group, groupIndex) => {
   group.keys.forEach((key, keyIndex) => {
     lookup[key] = { group: group.label, groupIndex, sortIndex: keyIndex };
@@ -200,6 +235,7 @@ export const buildWaterbodyOptions = (sheets) => sheets
       groupIndex: groupInfo.groupIndex,
       sortIndex: groupInfo.sortIndex,
       sourceIndex: fallbackIndex,
+      province: WATERBODY_PROVINCE[sheet.key] || 'Other',
     };
   })
   .filter((waterbody) => waterbody.stations.length)
@@ -213,6 +249,18 @@ export const buildWaterbodyOptions = (sheets) => sheets
     ...waterbody,
     stationCount: stations.length,
   }));
+
+export const groupWaterbodyByProvince = (waterbodies) => {
+  const groups = new Map();
+  [...waterbodies]
+    .sort((a, b) => (a.province || 'Other').localeCompare(b.province || 'Other') || a.name.localeCompare(b.name))
+    .forEach((wb) => {
+      const prov = wb.province || 'Other';
+      if (!groups.has(prov)) groups.set(prov, []);
+      groups.get(prov).push(wb);
+    });
+  return [...groups.entries()].map(([province, items]) => ({ province, items }));
+};
 
 export const groupWaterbodyOptions = (waterbodies) => {
   const groups = [];

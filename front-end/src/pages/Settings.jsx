@@ -8,6 +8,7 @@ import {
   Col,
   Empty,
   InputNumber,
+  Popconfirm,
   Row,
   Space,
   Statistic,
@@ -41,7 +42,10 @@ import { loadStationLocations } from "../utils/stationWorkbook";
 import {
   buildWaterbodyOptions,
   getReadableStations,
+  getStoredWqmSheets,
+  groupWaterbodyByProvince,
   publishWqmYear,
+  saveStoredWqmSheets,
   WQM_DRAFTS_KEY,
   WQM_PUBLISHED_YEAR_KEY,
   WQM_YEAR_OPTIONS,
@@ -381,6 +385,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     }
   });
   const [saved, setSaved] = useState("");
+  const provinceGroups = useMemo(() => groupWaterbodyByProvince(waterbodies), [waterbodies]);
   const activeKey = waterbodies[0]?.key || "";
   const [selectedKey, setSelectedKey] = useState(activeKey);
   const selectedWaterbody =
@@ -418,10 +423,13 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
 
   const updateSetting = (field, value) => {
     if (!selectedWaterbody) return;
+    // Always read from encryptedStorage to avoid stale React-state closure overwriting previous changes
+    const latestSettings = encryptedStorage.getItem("wqms_waterbody_profile_settings") || {};
+    const latestCurrent = latestSettings[selectedWaterbody.key] || {};
     const next = {
-      ...settings,
+      ...latestSettings,
       [selectedWaterbody.key]: {
-        ...current,
+        ...latestCurrent,
         [field]: value,
       },
     };
@@ -436,6 +444,28 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
       { waterbody: selectedWaterbody.name, field },
       currentUser,
     );
+  };
+
+  const deleteWaterbody = () => {
+    if (!selectedWaterbody) return;
+    const currentSheets = getStoredWqmSheets();
+    const filtered = currentSheets.filter((s) => s.key !== selectedWaterbody.key);
+    saveStoredWqmSheets(filtered);
+    const nextSettings = { ...settings };
+    delete nextSettings[selectedWaterbody.key];
+    setSettings(nextSettings);
+    encryptedStorage.setItem("wqms_waterbody_profile_settings", nextSettings);
+    window.dispatchEvent(
+      new CustomEvent("wqms:waterbody-profile-settings", { detail: nextSettings }),
+    );
+    const remaining = waterbodies.filter((w) => w.key !== selectedWaterbody.key);
+    setSelectedKey(remaining[0]?.key || "");
+    logActivity(
+      "Deleted waterbody from local dataset",
+      { waterbody: selectedWaterbody.name },
+      currentUser,
+    );
+    setSaved(`"${selectedWaterbody.name}" removed from the local dataset.`);
   };
 
   const updateStationAssignment = (station, targetWaterbodyKey) => {
@@ -478,13 +508,31 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
             value={selectedWaterbody?.key || ""}
             onChange={(event) => setSelectedKey(event.target.value)}
           >
-            {waterbodies.map((waterbody) => (
-              <option key={waterbody.key} value={waterbody.key}>
-                {waterbody.name}
-              </option>
+            {provinceGroups.map(({ province, items }) => (
+              <optgroup key={province} label={province}>
+                {items.map((waterbody) => (
+                  <option key={waterbody.key} value={waterbody.key}>
+                    {waterbody.name}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>
+        <Popconfirm
+          title={`Delete "${selectedWaterbody?.name}"?`}
+          description="This removes the waterbody from the local 2026 dataset. This cannot be undone without a page reload."
+          okText="Yes, delete"
+          okButtonProps={{ danger: true }}
+          cancelText="Cancel"
+          onConfirm={deleteWaterbody}
+          placement="bottomLeft"
+          disabled={!selectedWaterbody}
+        >
+          <Button danger size="small" disabled={!selectedWaterbody}>
+            Delete Waterbody
+          </Button>
+        </Popconfirm>
         {saved && (
           <p className="email-status" onAnimationEnd={() => setSaved("")}>
             {saved}
@@ -570,6 +618,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
                     stationLocations,
                   );
                   const stationName = override.name ?? station.stnId ?? "";
+                  const stationAddress = override.address ?? station.address ?? "";
                   const lat =
                     override.lat ??
                     (Number.isFinite(location?.lat)
@@ -598,33 +647,54 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
                       </td>
                       <td>
                         <div className="station-coordinate-fields">
-                          <input
-                            inputMode="decimal"
-                            value={lat}
-                            onChange={(event) =>
-                              updateStationOverride(
-                                station,
-                                "lat",
-                                event.target.value,
-                              )
-                            }
-                            aria-label={`Latitude for ${station.stnId}`}
-                          />
-                          <input
-                            inputMode="decimal"
-                            value={lng}
-                            onChange={(event) =>
-                              updateStationOverride(
-                                station,
-                                "lng",
-                                event.target.value,
-                              )
-                            }
-                            aria-label={`Longitude for ${station.stnId}`}
-                          />
+                          <label className="coord-field">
+                            <span>Lat</span>
+                            <input
+                              inputMode="decimal"
+                              placeholder="e.g. 14.9057"
+                              value={lat}
+                              onChange={(event) =>
+                                updateStationOverride(
+                                  station,
+                                  "lat",
+                                  event.target.value,
+                                )
+                              }
+                              aria-label={`Latitude for ${station.stnId}`}
+                            />
+                          </label>
+                          <label className="coord-field">
+                            <span>Lng</span>
+                            <input
+                              inputMode="decimal"
+                              placeholder="e.g. 121.0641"
+                              value={lng}
+                              onChange={(event) =>
+                                updateStationOverride(
+                                  station,
+                                  "lng",
+                                  event.target.value,
+                                )
+                              }
+                              aria-label={`Longitude for ${station.stnId}`}
+                            />
+                          </label>
                         </div>
                       </td>
-                      <td>{station.address || "Address not specified"}</td>
+                      <td>
+                        <input
+                          value={stationAddress}
+                          placeholder="Barangay, Municipality, Province"
+                          onChange={(event) =>
+                            updateStationOverride(
+                              station,
+                              "address",
+                              event.target.value,
+                            )
+                          }
+                          aria-label={`Address for ${station.stnId}`}
+                        />
+                      </td>
                       <td>
                         <select
                           value={assignedKey}
@@ -1846,23 +1916,13 @@ const Settings = ({ initialSection = "accounts" }) => {
             </section>
           )}
 
-          {active === "runtime" && (
+          {(active === "runtime" || active === "database") && (
             <section className="settings-section">
-              <h3>App Runtime Status</h3>
+              <h3>App Runtime &amp; Database Status</h3>
               <p className="section-desc">
-                Live server diagnostics with compact monitoring charts.
+                Live server diagnostics, monitoring charts, and MongoDB connection health.
               </p>
-              <SystemInfo mode="runtime" />
-            </section>
-          )}
-
-          {active === "database" && (
-            <section className="settings-section">
-              <h3>Database Status</h3>
-              <p className="section-desc">
-                MongoDB connection health from the server runtime.
-              </p>
-              <SystemInfo mode="database" />
+              <SystemInfo mode="all" />
             </section>
           )}
 
@@ -1899,22 +1959,18 @@ const Settings = ({ initialSection = "accounts" }) => {
             </section>
           )}
 
-          {active === "backup" && (
+          {(active === "backup" || active === "email") && (
             <section className="settings-section">
-              <h3>Backup Export & Config</h3>
+              <h3>Backup, Config &amp; Email</h3>
               <p className="section-desc">
-                Export or restore local drafts, app logs, display settings, and
-                runtime config metadata.
+                Export or restore local data, and test the Gmail SMTP integration.
               </p>
               <BackupPanel user={user} />
-            </section>
-          )}
-
-          {active === "email" && (
-            <section className="settings-section">
-              <h3>Email Configuration</h3>
-              <p className="section-desc">Test the Gmail SMTP integration.</p>
-              <EmailPanel />
+              <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+                <h4 style={{ margin: '0 0 0.4rem', fontSize: '0.92rem', fontWeight: 700 }}>Email Configuration</h4>
+                <p className="section-desc" style={{ margin: '0 0 0.75rem' }}>Test the Gmail SMTP integration.</p>
+                <EmailPanel />
+              </div>
             </section>
           )}
 
