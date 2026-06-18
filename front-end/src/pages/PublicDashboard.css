@@ -381,7 +381,7 @@
   background: var(--pub-surface-2);
   cursor: default;
   transition: background 0.2s;
-}
+}water-quality-monitoring
 
 .pub-param-chip:hover { background: rgba(68, 106, 203, 0.05); }
 
