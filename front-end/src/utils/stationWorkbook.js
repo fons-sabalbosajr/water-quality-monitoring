@@ -49,3 +49,26 @@ export const loadStationLocations = async () => {
   const stationSheet = workbook.find(({ sheet }) => sheet === 'Station_List') || workbook[0];
   return mapStationRows(stationSheet?.data || []);
 };
+
+// In-memory, session-scoped cache for the parsed station workbook.
+// The XLSX is a static bundled asset that does not change during a session, so
+// parsing it once and reusing the resolved promise avoids repeated network
+// fetches and expensive in-browser spreadsheet parsing across pages (dashboard,
+// 3D map, visualizations, public dashboard, settings). Nothing is persisted to
+// disk, so no sensitive data is exposed; on error the cache is cleared so the
+// next caller can retry.
+let stationLocationsCache = null;
+
+export const loadStationLocationsCached = () => {
+  if (!stationLocationsCache) {
+    stationLocationsCache = loadStationLocations().catch((error) => {
+      stationLocationsCache = null;
+      throw error;
+    });
+  }
+  return stationLocationsCache;
+};
+
+export const clearStationLocationsCache = () => {
+  stationLocationsCache = null;
+};

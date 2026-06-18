@@ -412,9 +412,26 @@
 }
 
 .wb-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
   background: var(--table-head);
+}
+
+.wb-summary-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.wb-summary-legend .ant-tag {
+  margin-inline-end: 0;
+  font-weight: 600;
 }
 
 .wb-summary-title {
@@ -476,7 +493,19 @@
   min-width: 80px;
 }
 
-.wbs-stn-id { display: block; }
+.wbs-stn-id {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.wbs-stn-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
 
 .wbs-even { background: var(--bg-card); }
 .wbs-odd  { background: var(--row-hover); }
@@ -510,16 +539,46 @@
   white-space: nowrap;
 }
 
+.wbs-param-name {
+  display: block;
+  font-weight: 600;
+}
+
+.wbs-param-limit {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .wbs-even .wbs-td-param { background: var(--bg-card); }
 .wbs-odd  .wbs-td-param { background: var(--row-hover); }
 
 .wbs-td-val {
-  text-align: right;
+  text-align: center;
   padding: 0.5rem 0.75rem;
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-primary);
+}
+
+.wbs-val-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+
+.wbs-val-icon {
+  display: inline-flex;
+  font-size: 0.78rem;
+}
+
+.wbs-val-num {
+  font-variant-numeric: tabular-nums;
 }
 
 .wbs-null {

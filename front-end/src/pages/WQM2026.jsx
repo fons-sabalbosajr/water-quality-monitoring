@@ -10,14 +10,16 @@ import 'antd/dist/reset.css';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/axios';
 import { logActivity } from '../utils/appLog';
+import { toastSaved } from '../utils/swal';
 import encryptedStorage from '../utils/encryptedStorage';
 import {
-  MONTHS_SHORT, fmt, getAvailableParams, getParamData,
+  MONTHS_SHORT, PARAM_LIMITS, fmt, getAvailableParams, getParamData,
   getParamUnit, normalizeParamName, OBSERVATION_PARAM, toNumber,
 } from '../utils/wqmData';
 import {
-  INITIAL_SHEETS, WATERBODY_PROVINCE, buildWaterbodyOptions, getStoredWqmSheets,
-  groupWaterbodyByProvince, resetStoredWqmSheets, saveStoredWqmSheets,
+  INITIAL_SHEETS, WATERBODY_PROVINCE, getStoredWqmSheets,
+  resetStoredWqmSheets, saveStoredWqmSheets,
+  isCustomTabularYear, removeTabularYear,
 } from '../utils/wqmSheets';
 import './WQM2026.css';
 
@@ -27,11 +29,17 @@ const clone = (value) => JSON.parse(JSON.stringify(value));
 const normalizeMonthly = (monthly = []) => Array.from({ length: 12 }, (_, index) => monthly[index] ?? null);
 const getYearDraftKey = (year) => `wqm_${year}_drafts`;
 
-const getStoredSheetsForYear = (year, fallback = INITIAL_SHEETS) => (
-  year === 2026
-    ? getStoredWqmSheets()
-    : (encryptedStorage.getItem(getYearDraftKey(year)) || clone(fallback))
-);
+// 2026 (bundled active dataset) and any admin-created custom year are stored
+// entirely in encrypted local storage. Only the legacy 2024/2025 archives are
+// fetched from MongoDB.
+const isLocalYear = (year) => year === 2026 || isCustomTabularYear(year);
+
+const getStoredSheetsForYear = (year, fallback = INITIAL_SHEETS) => {
+  if (year === 2026) return getStoredWqmSheets();
+  const stored = encryptedStorage.getItem(getYearDraftKey(year));
+  if (stored) return stored;
+  return isCustomTabularYear(year) ? [] : clone(fallback);
+};
 
 const saveStoredSheetsForYear = (year, sheets) => {
   if (year === 2026) {
@@ -66,6 +74,21 @@ const parseEditableValue = (value) => {
 
 const getDisplayParamName = (param) => (normalizeParamName(param) === OBSERVATION_PARAM ? 'Observations' : param);
 
+const getWqgStandard = (param) => {
+  const norm = normalizeParamName(param);
+  if (norm === OBSERVATION_PARAM) return null;
+  const limit = PARAM_LIMITS[norm];
+  if (!limit) return null;
+  const unit = limit.unit ? ` ${limit.unit}` : '';
+  if (limit.min !== undefined && limit.max !== undefined)
+    return `${limit.min} – ${limit.max}${unit}`;
+  if (limit.min !== undefined) return `≥ ${limit.min}${unit}`;
+  if (limit.max !== undefined) return `≤ ${limit.max}${unit}`;
+  return null;
+};
+
+const isFilledMonthValue = (value) => value !== null && value !== undefined && value !== '';
+
 const getParamStorageKey = (station, displayParam) => (
   Object.keys(station.params || {}).find((key) => normalizeParamName(key) === normalizeParamName(displayParam)) || displayParam
 );
@@ -83,14 +106,14 @@ const buildStationDraft = (station, params) => ({
   })),
 });
 
-const WQM2026 = ({ year = 2026 }) => {
+const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   const { user } = useAuth();
   const canManageData = ['admin', 'developer'].includes(user?.role);
   const canEditYear = canManageData;
   const hasStoredSheetsForYear = (year) => Boolean(encryptedStorage.getItem(getYearDraftKey(year)));
-  const [sheets, setSheets] = useState(() => (year === 2026 ? getStoredSheetsForYear(year) : []));
+  const [sheets, setSheets] = useState(() => (isLocalYear(year) ? getStoredSheetsForYear(year) : []));
   const [sourceSheets, setSourceSheets] = useState(() => (year === 2026 ? clone(INITIAL_SHEETS) : []));
-  const [loading, setLoading] = useState(year !== 2026);
+  const [loading, setLoading] = useState(!isLocalYear(year));
   const [activeTab, setActiveTab] = useState('');
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
@@ -112,13 +135,18 @@ const WQM2026 = ({ year = 2026 }) => {
     });
     const hasDraft = hasStoredSheetsForYear(year);
 
-    if (year === 2026) {
-      const localSheets = getStoredSheetsForYear(year, INITIAL_SHEETS);
+    if (isLocalYear(year)) {
+      const fallbackSource = year === 2026 ? INITIAL_SHEETS : [];
+      const localSheets = getStoredSheetsForYear(year, fallbackSource);
       queueMicrotask(() => {
         if (!cancelled) {
-          setMessage(hasDraft ? `WQM ${year} loaded from encrypted local draft.` : `WQM ${year} loaded from the bundled source dataset.`);
+          setMessage(
+            year === 2026
+              ? (hasDraft ? `WQM ${year} loaded from encrypted local draft.` : `WQM ${year} loaded from the bundled source dataset.`)
+              : `Monitoring year ${year} loaded from encrypted local draft.`,
+          );
           setLoading(false);
-          setSourceSheets(clone(INITIAL_SHEETS));
+          setSourceSheets(year === 2026 ? clone(INITIAL_SHEETS) : clone(localSheets));
           setSheets(localSheets);
           setActiveTab(localSheets[0]?.key || '');
         }
@@ -160,8 +188,6 @@ const WQM2026 = ({ year = 2026 }) => {
   const modalParams = useMemo(() => (sheet ? getAvailableParams(sheet.stations, true) : []), [sheet]);
   const periodLabels = sheet?.periodLabels?.length ? sheet.periodLabels : MONTHS_SHORT;
   const isReadOnlyModal = modalMode === 'view' || !canEditYear;
-  const waterbodyOptions = useMemo(() => buildWaterbodyOptions(sheets), [sheets]);
-  const provinceGroups = useMemo(() => groupWaterbodyByProvince(waterbodyOptions), [waterbodyOptions]);
 
   // Sider groups use the raw sheets list (includes empty waterbodies the dev just created)
   const siderGroups = useMemo(() => {
@@ -179,30 +205,10 @@ const WQM2026 = ({ year = 2026 }) => {
       }));
   }, [sheets]);
 
-  useEffect(() => {
-    setCollapsedProvinces((current) => {
-      const next = { ...current };
-      let changed = false;
-      provinceGroups.forEach(({ province }) => {
-        if (!(province in next)) {
-          next[province] = false;
-          changed = true;
-        }
-      });
-      Object.keys(next).forEach((province) => {
-        if (!provinceGroups.some((group) => group.province === province)) {
-          delete next[province];
-          changed = true;
-        }
-      });
-      return changed ? next : current;
-    });
-  }, [provinceGroups]);
-
   const toggleProvinceGroup = (province) => {
     setCollapsedProvinces((current) => ({
       ...current,
-      [province]: !current[province],
+      [province]: !(current[province] ?? true),
     }));
   };
 
@@ -218,8 +224,13 @@ const WQM2026 = ({ year = 2026 }) => {
           .map((param) => {
             const data = getParamData(station, param);
             const monthly = normalizeMonthly(data?.monthly);
-            const latest = [...monthly].reverse().find((value) => value !== null && value !== undefined && value !== '');
-            return latest !== undefined ? `${param}: ${fmt(latest)}` : null;
+            for (let monthIndex = monthly.length - 1; monthIndex >= 0; monthIndex -= 1) {
+              const latest = monthly[monthIndex];
+              if (isFilledMonthValue(latest)) {
+                return `${param} (${periodLabels[monthIndex] || MONTHS_SHORT[monthIndex]}): ${fmt(latest)}`;
+              }
+            }
+            return null;
           })
           .filter(Boolean)
           .slice(0, 3);
@@ -234,12 +245,12 @@ const WQM2026 = ({ year = 2026 }) => {
           latestValues,
         };
       });
-  }, [params, search, sheet]);
+  }, [params, periodLabels, search, sheet]);
 
   const updateSheets = (updater, successMessage, logDetails) => {
     setSheets((current) => {
       const next = updater(clone(current));
-      if (year === 2026) {
+      if (isLocalYear(year)) {
         saveStoredSheetsForYear(year, next);
         if (successMessage) setMessage(successMessage);
       } else {
@@ -309,6 +320,7 @@ const WQM2026 = ({ year = 2026 }) => {
       action: editingStation ? 'Updated station record' : 'Added station record',
       details: { waterbody: sheet.name, station: normalizedStation.stnId },
     });
+    toastSaved(editingStation ? 'Station record updated.' : 'Station record added.');
     closeModal();
   };
 
@@ -349,7 +361,7 @@ const WQM2026 = ({ year = 2026 }) => {
   const deleteWaterbody = () => {
     if (!sheet || !canEditYear) return;
     const next = sheets.filter((s) => s.key !== sheet.key);
-    if (year === 2026) {
+    if (isLocalYear(year)) {
       saveStoredSheetsForYear(year, next);
       setMessage(`"${sheet.name}" removed from the local WQM ${year} draft.`);
     } else {
@@ -393,7 +405,7 @@ const WQM2026 = ({ year = 2026 }) => {
       stations: [],
     };
     const next = [...sheets, newSheet];
-    if (year === 2026) {
+    if (isLocalYear(year)) {
       saveStoredSheetsForYear(year, next);
       setMessage(`"${newSheet.name}" added to WQM ${year} dataset.`);
     } else {
@@ -457,7 +469,7 @@ const WQM2026 = ({ year = 2026 }) => {
     {
       title: 'Parameters With Values',
       dataIndex: 'parameterCount',
-      width: 170,
+      width: 120,
       render: (value) => <Tag color="blue">{value} parameters</Tag>,
     },
     {
@@ -496,39 +508,42 @@ const WQM2026 = ({ year = 2026 }) => {
   ];
 
   const classLabel = sheet?.classInfo?.match(/CLASS\s+(\S+)/)?.[1] || '';
+  const visibleMonthIndices = useMemo(() => {
+    if (!stationDraft) return MONTHS_SHORT.map((_, index) => index);
+    if (modalMode === 'add') return MONTHS_SHORT.map((_, index) => index);
+
+    return MONTHS_SHORT
+      .map((_, index) => index)
+      .filter((monthIndex) => modalParams.some((param) => {
+        const value = stationDraft.params[param]?.monthly?.[monthIndex];
+        return isFilledMonthValue(value);
+      }));
+  }, [modalMode, modalParams, stationDraft]);
+
   const modalParameterColumns = [
     {
       title: 'Parameter',
       dataIndex: 'param',
       fixed: 'left',
-      width: 170,
+      width: 60,
       render: (param) => (
         <div className="wqm-param-text">
-          <strong>{getDisplayParamName(param)}</strong>
+          {getDisplayParamName(param)}
         </div>
       ),
     },
-    {
-      title: 'Unit',
-      dataIndex: 'param',
-      width: 80,
-      render: (param) => (
-        <span className="parameter-unit-cell">
-          {normalizeParamName(param) === OBSERVATION_PARAM ? 'text' : (getParamUnit(param) || 'index')}
-        </span>
-      ),
-    },
-    ...MONTHS_SHORT.map((month, monthIndex) => ({
-      title: periodLabels[monthIndex] || month,
+    ...visibleMonthIndices.map((monthIndex) => ({
+      key: `month-${monthIndex}`,
+      title: periodLabels[monthIndex] || MONTHS_SHORT[monthIndex],
       dataIndex: ['monthly', monthIndex],
-      width: 96,
+      width: 100,
       render: (_, row) => {
         const isObservation = normalizeParamName(row.param) === OBSERVATION_PARAM;
         const value = stationDraft?.params[row.param]?.monthly?.[monthIndex] ?? '';
         return isObservation ? (
           <Input.TextArea
             className="parameter-observation-input"
-            autoSize={{ minRows: 2, maxRows: 5 }}
+            autoSize={{ minRows: 7}}
             wrap="soft"
             value={value}
             disabled={isReadOnlyModal}
@@ -551,8 +566,23 @@ const WQM2026 = ({ year = 2026 }) => {
       render: (_, row) => (
         normalizeParamName(row.param) === OBSERVATION_PARAM
           ? <span className="wqm-muted">-</span>
-          : <Input size="small" value={stationDraft?.params[row.param]?.avg ?? ''} disabled />
+          : <Input size="small" value={stationDraft?.params[row.param]?.avg ?? ''} />
       ),
+    },
+    {
+      title: 'WQG Standard',
+      dataIndex: 'param',
+      key: 'wqg',
+      // fixed: 'right',
+      width: 80,
+      render: (param) => {
+        const standard = getWqgStandard(param);
+        return standard ? (
+          <Tag color="green" className="wqm-wqg-tag">{standard}</Tag>
+        ) : (
+          <span className="wqm-muted">—</span>
+        );
+      },
     },
   ];
   const modalParameterRows = modalParams.map((param) => ({
@@ -585,16 +615,16 @@ const WQM2026 = ({ year = 2026 }) => {
               <div key={province} className="wqm-sider-province-group">
                 <button
                   type="button"
-                  className={`wqm-sider-province-toggle${collapsedProvinces[province] ? ' is-collapsed' : ''}`}
+                  className={`wqm-sider-province-toggle${(collapsedProvinces[province] ?? true) ? ' is-collapsed' : ''}`}
                   onClick={() => toggleProvinceGroup(province)}
-                  aria-expanded={!collapsedProvinces[province]}
+                  aria-expanded={!(collapsedProvinces[province] ?? true)}
                 >
                   <span className="wqm-sider-province-label">{province}</span>
                   <span className="wqm-sider-province-icon">
-                    {collapsedProvinces[province] ? <RightOutlined /> : <DownOutlined />}
+                    {(collapsedProvinces[province] ?? true) ? <RightOutlined /> : <DownOutlined />}
                   </span>
                 </button>
-                {!collapsedProvinces[province] && items.map((item) => (
+                {!(collapsedProvinces[province] ?? true) && items.map((item) => (
                   <button
                     type="button"
                     key={item.key}
@@ -674,6 +704,23 @@ const WQM2026 = ({ year = 2026 }) => {
                   >
                     <Button danger disabled={!sheet} icon={<DeleteOutlined />}>Delete Waterbody</Button>
                   </Popconfirm>
+                  {isCustomTabularYear(year) && (
+                    <Popconfirm
+                      title={`Delete monitoring year ${year}?`}
+                      description="This permanently removes the entire monitoring-year template and all its encoded data."
+                      okText="Delete year"
+                      okButtonProps={{ danger: true }}
+                      cancelText="Cancel"
+                      onConfirm={() => {
+                        removeTabularYear(year);
+                        logActivity('Deleted monitoring year', { year }, user);
+                        toastSaved(`Monitoring year ${year} deleted.`);
+                        onYearDeleted?.(year);
+                      }}
+                    >
+                      <Button danger icon={<DeleteOutlined />}>Delete Year {year}</Button>
+                    </Popconfirm>
+                  )}
                 </>
               )}
             </Space>
@@ -704,7 +751,7 @@ const WQM2026 = ({ year = 2026 }) => {
         title={modalMode === 'add' ? 'Add Station' : modalMode === 'edit' ? 'Edit Station' : 'Station Details'}
         open={Boolean(modalMode)}
         onCancel={closeModal}
-        width="min(1600px, 96vw)"
+        width="min(1500px, 96vw)"
         rootClassName="wqm-station-modal-root"
         className="wqm-station-modal"
         destroyOnHidden
@@ -737,7 +784,7 @@ const WQM2026 = ({ year = 2026 }) => {
               columns={modalParameterColumns}
               dataSource={modalParameterRows}
               pagination={false}
-              scroll={{ x: 1320, y: '58vh' }}
+              scroll={{ x: 1640, y: '58vh' }}
             />
           </div>
         )}
@@ -755,7 +802,7 @@ const WQM2026 = ({ year = 2026 }) => {
         destroyOnHidden
       >
         {waterbodyDraft && (
-          <div className="station-modal-grid" style={{ marginTop: '0.75rem' }}>
+          <div className="station-modal-grid waterbody-modal-grid" style={{ marginTop: '0.75rem' }}>
             <label>
               <span>Waterbody Name <span style={{ color: '#ef4444' }}>*</span></span>
               <Input

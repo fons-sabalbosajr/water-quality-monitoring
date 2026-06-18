@@ -80,24 +80,25 @@ import {
 import {
   buildWaterbodyOptions,
   getReadableStations,
+  groupWaterbodyByProvince,
   usePublishedWqmDataset,
 } from "../utils/wqmSheets";
-import { loadStationLocations } from "../utils/stationWorkbook";
-import encryptedStorage from "../utils/encryptedStorage";
+import { loadStationLocationsCached } from "../utils/stationWorkbook";
+import { resolveWaterbodyMapLocations } from "../utils/stationGeo";
+import { useForecastMonths } from "../utils/forecastSettings";
 import "./PublicDashboard.css";
-
-const FORECAST_MONTHS_KEY = 'wqms_forecast_months';
-const getStoredForecastMonths = () => {
-  try {
-    const n = Number(encryptedStorage.getItem(FORECAST_MONTHS_KEY));
-    return Number.isFinite(n) && n >= 1 && n <= 3 ? n : 3;
-  } catch { return 3; }
-};
 
 const CesiumStationMap = lazy(() => import("../components/CesiumStationMap"));
 
 const { Sider, Content, Header } = Layout;
 const { Title, Text } = Typography;
+
+/* Build antd Select options grouped per province. */
+const waterbodyProvinceOptions = (waterbodyOptions) =>
+  groupWaterbodyByProvince(waterbodyOptions).map((group) => ({
+    label: group.province,
+    options: group.items.map((item) => ({ value: item.key, label: item.name })),
+  }));
 
 /* ── Design tokens ── */
 const CHART_COLORS = [
@@ -148,12 +149,6 @@ const avg = (values) => {
   return valid.length ? valid.reduce((s, v) => s + v, 0) / valid.length : null;
 };
 
-const normalizeForMatch = (val) =>
-  String(val || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-
 const getObsMeta = (value) => {
   const t = String(value || "").toLowerCase();
   if (/dead|kill|oil|grease|sewage|garbage|foam|foul|odor|black/.test(t))
@@ -191,7 +186,6 @@ const getForecastParamLabel = (param) => {
     "Color": "Color",
     "Color (TCU)": "Color",
     "Fecal Coliform": "Fecal Coliform",
-    "Fecal Coliform (MPN/100mL)": "Fecal Coliform",
     "NO3-N": "Nitrates (N03-N)",
     "NO3-N (mg/L)": "Nitrates (N03-N)",
     "PO4-P": "Phospates (P04-P)",
@@ -507,7 +501,7 @@ const RequestReminderModal = ({ open, onConfirm, onCancel }) => (
       type="warning"
       showIcon
       style={{ marginBottom: 14 }}
-      message={
+      title={
         <span>
           <strong>Important:</strong> Downloading water quality data requires a
           formal data request to EMB Region III.
@@ -645,7 +639,7 @@ const ForecastDetailModal = ({ card, stations, open, onClose }) => {
           ))}
         </div>
 
-        <Divider orientation="left" style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700 }}>
+        <Divider titlePlacement="left" style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700 }}>
           Monthly Readings by Station
         </Divider>
         <Table
@@ -776,14 +770,8 @@ const DashboardView = ({
   const params = useMemo(() => getAvailableParams(stations, false), [stations]);
   const [chartParam, setChartParam] = useState("");
   const [forecastStnId, setForecastStnId] = useState("");
-  const [forecastMonths, setForecastMonths] = useState(getStoredForecastMonths);
-
-  // Re-read when admin changes the setting
-  useEffect(() => {
-    const handler = (e) => setForecastMonths(e.detail || getStoredForecastMonths());
-    window.addEventListener('wqms:forecast-months', handler);
-    return () => window.removeEventListener('wqms:forecast-months', handler);
-  }, []);
+  // Reactive forecast horizon — applies admin changes immediately.
+  const forecastMonths = useForecastMonths();
 
   const chartParams = useMemo(
     () =>
@@ -902,38 +890,16 @@ const DashboardView = ({
 
   /* ── Map locations ── */
   const mapLocations = useMemo(() => {
-    const stnNames = stations.map((stn) => normalizeForMatch(stn.stnId));
-    const wbNorm = normalizeForMatch(selectedName);
-    const wbKey = normalizeForMatch(waterbodyKey);
-    return stationLocations
-      .filter((loc) => {
-        const wb = normalizeForMatch(
-          loc.waterbodyRiver || loc.waterbodyLoc || "",
-        );
-        const locStn = normalizeForMatch(loc.station || "");
-        const wbMatch =
-          wb &&
-          (wb === wbNorm ||
-            wb.includes(wbKey) ||
-            wbKey.includes(wb) ||
-            wb.includes(wbNorm) ||
-            wbNorm.includes(wb));
-        const stnMatch = stnNames.some(
-          (n) =>
-            n && (locStn === n || locStn.includes(n) || n.includes(locStn)),
-        );
-        return wbMatch || stnMatch;
-      })
-      .map((loc) => {
-        const stn = stations.find((s) => {
-          const sn = normalizeForMatch(s.stnId);
-          const ln = normalizeForMatch(loc.station || "");
-          return sn && ln && (sn === ln || sn.includes(ln) || ln.includes(sn));
-        });
-        return { ...loc, stationData: stn || null };
-      })
-      .filter((loc) => loc.stationData);
-  }, [stationLocations, stations, selectedName, waterbodyKey]);
+    const option = waterbodyOptions.find((o) => o.key === waterbodyKey);
+    // Station-first strict resolution: only this waterbody's own stations are
+    // plotted, each enriched with its record for popups and any admin
+    // coordinate overrides applied.
+    return resolveWaterbodyMapLocations(
+      { key: waterbodyKey, name: selectedName, province: option?.province },
+      stations,
+      stationLocations,
+    );
+  }, [stationLocations, stations, selectedName, waterbodyKey, waterbodyOptions]);
 
   /* ── Observations ── */
   const observations = useMemo(
@@ -977,7 +943,7 @@ const DashboardView = ({
   if (loading)
     return (
       <div className="pub-state-screen">
-        <Spin size="large" tip="Loading water quality data..." />
+        <Spin size="large" description="Loading water quality data..." />
       </div>
     );
   if (error)
@@ -1009,10 +975,7 @@ const DashboardView = ({
           onChange={setWaterbodyKey}
           size="middle"
           style={{ minWidth: 220 }}
-          options={waterbodyOptions.map((o) => ({
-            value: o.key,
-            label: o.name,
-          }))}
+          options={waterbodyProvinceOptions(waterbodyOptions)}
           showSearch
           filterOption={(input, option) =>
             (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
@@ -1024,7 +987,7 @@ const DashboardView = ({
       {/* KPI Tiles — 6 parameter tiles */}
       <Row gutter={[12, 12]} className="pub-kpi-row pub-animate pub-animate-d1">
         <Col xs={12} sm={8} xl={4}>
-          <Card className="pub-kpi-card pub-kpi-blue" bordered={false}>
+          <Card className="pub-kpi-card pub-kpi-blue" variant="borderless">
             <Statistic
               title="Monitoring Stations"
               value={stations.length}
@@ -1038,7 +1001,7 @@ const DashboardView = ({
         <Col xs={12} sm={8} xl={4}>
           <Card
             className={`pub-kpi-card ${avgDO !== null && avgDO < 5 ? "pub-kpi-red" : "pub-kpi-green"}`}
-            bordered={false}
+            variant="borderless"
           >
             <Statistic
               title="Avg Dissolved Oxygen"
@@ -1058,7 +1021,7 @@ const DashboardView = ({
         <Col xs={12} sm={8} xl={4}>
           <Card
             className={`pub-kpi-card ${avgBOD !== null && bodExceed > 0 ? "pub-kpi-red" : avgBOD !== null && avgBOD > 5.6 ? "pub-kpi-gold" : "pub-kpi-green"}`}
-            bordered={false}
+            variant="borderless"
           >
             <Statistic
               title="Avg BOD"
@@ -1078,7 +1041,7 @@ const DashboardView = ({
         <Col xs={12} sm={8} xl={4}>
           <Card
             className={`pub-kpi-card ${avgTSS !== null && tssExceed > 0 ? "pub-kpi-gold" : "pub-kpi-green"}`}
-            bordered={false}
+            variant="borderless"
           >
             <Statistic
               title="Avg TSS"
@@ -1098,7 +1061,7 @@ const DashboardView = ({
         <Col xs={12} sm={8} xl={4}>
           <Card
             className={`pub-kpi-card ${phExceed > 0 ? "pub-kpi-gold" : phVals.length ? "pub-kpi-green" : "pub-kpi-blue"}`}
-            bordered={false}
+            variant="borderless"
           >
             <Statistic
               title="Avg pH"
@@ -1117,7 +1080,7 @@ const DashboardView = ({
         <Col xs={12} sm={8} xl={4}>
           <Card
             className={`pub-kpi-card ${fecalExceed > 0 ? "pub-kpi-red" : fecalVals.length ? "pub-kpi-green" : "pub-kpi-blue"}`}
-            bordered={false}
+            variant="borderless"
           >
             <Statistic
               title="Fecal Coliform"
@@ -1156,7 +1119,7 @@ const DashboardView = ({
                     />
                   </Space>
                 }
-                bordered={false}
+                variant="borderless"
                 className="pub-chart-card pub-eq-card"
                 extra={
                   <Space size={4}>
@@ -1276,14 +1239,14 @@ const DashboardView = ({
                     <span>Station Map</span>
                   </Space>
                 }
-                bordered={false}
+                variant="borderless"
                 className="pub-map-card pub-eq-card"
               >
                 <div className="pub-map-frame pub-map-frame-fill">
                   <Suspense
                     fallback={
                       <div className="pub-map-loading">
-                        <Spin tip="Loading map..." />
+                        <Spin description="Loading map..." />
                       </div>
                     }
                   >
@@ -1305,7 +1268,7 @@ const DashboardView = ({
       {gaugeParams.length > 0 && (
         <>
           <Divider
-            orientation="left"
+            titlePlacement="left"
             className="pub-divider pub-animate pub-animate-d2"
           >
             Station Parameter Status & Field Observations
@@ -1350,7 +1313,7 @@ const DashboardView = ({
                       </Space>
                     }
                     size="small"
-                    bordered={false}
+                    variant="borderless"
                     className="pub-station-card"
                     extra={
                       <Space size={4}>
@@ -1469,7 +1432,7 @@ const DashboardView = ({
       {allForecastCards.length > 0 && (
         <>
           <Divider
-            orientation="left"
+            titlePlacement="left"
             className="pub-divider pub-animate pub-animate-d3"
           >
             <Space>
@@ -1538,7 +1501,7 @@ const DashboardView = ({
                           </Tag>
                         </Space>
                       }
-                      bordered={false}
+                      variant="borderless"
                       size="small"
                       className="pub-forecast-card pub-forecast-card-clickable"
                       onClick={() => setForecastModalCard(card)}
@@ -1614,6 +1577,8 @@ const TabularView = ({
   const [showForecastFor, setShowForecastFor] = useState({});
   const [requestOpen, setRequestOpen] = useState(false);
   const [pendingExportFn, setPendingExportFn] = useState(null);
+  // Reactive forecast horizon — applies admin changes immediately.
+  const forecastMonths = useForecastMonths();
 
   const visibleStations =
     filterStation === "all"
@@ -1634,12 +1599,12 @@ const TabularView = ({
             actual: getMonthlyNumber(getParamData(stn, param), i),
           })).filter((pt) => pt.actual !== null);
           if (observed.length < 3) return null;
-          return { stn: stn.stnId, colorIdx: sIdx, ...buildForecast(observed, getStoredForecastMonths()) };
+          return { stn: stn.stnId, colorIdx: sIdx, ...buildForecast(observed, forecastMonths) };
         })
         .filter(Boolean);
     });
     return result;
-  }, [params, stations]);
+  }, [params, stations, forecastMonths]);
 
   /* Overview data with filters */
   const overviewData = useMemo(
@@ -1694,7 +1659,7 @@ const TabularView = ({
         fixed: "left",
         width: 150,
         render: (val, row) => (
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Text strong>{val}</Text>
             <Space size={2}>
               {row._alertCount > 0 && (
@@ -2111,7 +2076,7 @@ const TabularView = ({
   if (loading)
     return (
       <div className="pub-state-screen">
-        <Spin size="large" tip="Loading..." />
+        <Spin size="large" description="Loading..." />
       </div>
     );
   if (error)
@@ -2141,10 +2106,7 @@ const TabularView = ({
           onChange={setWaterbodyKey}
           size="middle"
           style={{ minWidth: 220 }}
-          options={waterbodyOptions.map((o) => ({
-            value: o.key,
-            label: o.name,
-          }))}
+          options={waterbodyProvinceOptions(waterbodyOptions)}
           showSearch
           filterOption={(input, option) =>
             (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
@@ -2160,7 +2122,7 @@ const TabularView = ({
             <span>Latest Parameter Readings</span>
           </Space>
         }
-        bordered={false}
+        variant="borderless"
         className="pub-table-card pub-animate pub-animate-d1"
         extra={
           <Space wrap>
@@ -2215,7 +2177,7 @@ const TabularView = ({
 
       {/* Per-parameter expand/collapse */}
       <Divider
-        orientation="left"
+        titlePlacement="left"
         className="pub-divider pub-animate pub-animate-d2"
       >
         <Space>
@@ -2240,9 +2202,9 @@ const TabularView = ({
       {collapseItems.length > 0 ? (
         <Collapse
           items={collapseItems}
-          bordered={false}
+          variant="borderless"
           className="pub-collapse pub-animate pub-animate-d2"
-          expandIconPosition="start"
+          expandIconPlacement="start"
         />
       ) : (
         <Empty
@@ -2367,10 +2329,7 @@ const ExportView = ({
           onChange={setWaterbodyKey}
           size="middle"
           style={{ minWidth: 220 }}
-          options={waterbodyOptions.map((o) => ({
-            value: o.key,
-            label: o.name,
-          }))}
+          options={waterbodyProvinceOptions(waterbodyOptions)}
           showSearch
           filterOption={(input, option) =>
             (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
@@ -2384,7 +2343,7 @@ const ExportView = ({
         showIcon
         className="pub-animate pub-animate-d1"
         style={{ marginBottom: 16, borderRadius: '0.75rem' }}
-        message={
+        title={
           <span>
             <strong>Data Access Request Required.</strong> To download water quality data, please submit a formal data request to EMB Region III at{" "}
             <a href="https://r3.emb.gov.ph" target="_blank" rel="noreferrer">r3.emb.gov.ph</a>.
@@ -2398,7 +2357,7 @@ const ExportView = ({
         className="pub-export-row pub-animate pub-animate-d1"
       >
         <Col xs={24} md={8}>
-          <Card className="pub-export-card" bordered={false} hoverable>
+          <Card className="pub-export-card" variant="borderless" hoverable>
             <div className="pub-export-icon pub-export-icon-blue">
               <FileExcelOutlined style={{ fontSize: 30 }} />
             </div>
@@ -2416,7 +2375,7 @@ const ExportView = ({
             <Alert
               type="info"
               showIcon
-              message="Request required before downloading."
+              title="Request required before downloading."
               style={{ marginTop: 10, fontSize: 11 }}
             />
             <Button
@@ -2432,7 +2391,7 @@ const ExportView = ({
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card className="pub-export-card" bordered={false} hoverable>
+          <Card className="pub-export-card" variant="borderless" hoverable>
             <div className="pub-export-icon pub-export-icon-green">
               <DownloadOutlined style={{ fontSize: 30 }} />
             </div>
@@ -2450,7 +2409,7 @@ const ExportView = ({
             <Alert
               type="info"
               showIcon
-              message="Request required before downloading."
+              title="Request required before downloading."
               style={{ marginTop: 10, fontSize: 11 }}
             />
             <Button
@@ -2465,7 +2424,7 @@ const ExportView = ({
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card className="pub-export-card" bordered={false} hoverable>
+          <Card className="pub-export-card" variant="borderless" hoverable>
             <div className="pub-export-icon pub-export-icon-gold">
               <FileExcelOutlined style={{ fontSize: 30 }} />
             </div>
@@ -2482,7 +2441,7 @@ const ExportView = ({
             <Alert
               type="warning"
               showIcon
-              message="Large file — request required before downloading."
+              title="Large file — request required before downloading."
               style={{ marginTop: 10, fontSize: 11 }}
             />
             <Button
@@ -2498,14 +2457,14 @@ const ExportView = ({
         </Col>
       </Row>
       <Card
-        bordered={false}
+        variant="borderless"
         className="pub-export-note pub-animate pub-animate-d2"
         style={{ marginTop: 16 }}
       >
         <Alert
           type="info"
           showIcon
-          message={
+          title={
             <span>
               <strong>How to Request:</strong> Visit{" "}
               <a href="https://r3.emb.gov.ph" target="_blank" rel="noreferrer">
@@ -2592,7 +2551,7 @@ const PublicDashboard = () => {
 
   useEffect(() => {
     let cancelled = false;
-    loadStationLocations()
+    loadStationLocationsCached()
       .then((locs) => {
         if (!cancelled) setStationLocations(locs);
       })

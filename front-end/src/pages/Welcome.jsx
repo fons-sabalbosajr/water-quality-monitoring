@@ -1,18 +1,24 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import embLogo from '../assets/emblogo.svg';
 import bgEmb from '../assets/bgemb.webp';
 import { useTheme } from '../context/ThemeContext';
 import {
   IcoAlertTriangle,
+  IcoArrowUp,
   IcoBuilding,
   IcoCalendar,
   IcoCheckCircle,
+  IcoClose,
   IcoDashboard,
   IcoEye,
+  IcoGlobe,
   IcoLayers,
+  IcoMail,
   IcoMapPin,
+  IcoMenu,
   IcoMoon,
+  IcoPhone,
   IcoSun,
   IcoTable,
   IcoTrendUp,
@@ -145,12 +151,6 @@ const aiUses = [
   'Supports technical review without replacing reviewer judgment',
 ];
 
-const dashboardMetrics = [
-  ['Stations', '3', '#446ACB'],
-  ['Avg DO', '6.94', '#7CB675'],
-  ['Fecal watch', '2', '#f59e0b'],
-];
-
 const menuCards = [
   {
     title: '3D Waterbody Map',
@@ -176,9 +176,123 @@ const AIAssistantLogo = () => (
   </div>
 );
 
+const EMB_CONTACTS = [
+  {
+    icon: (props) => <IcoGlobe {...props} />,
+    label: 'Website',
+    value: 'r3.emb.gov.ph',
+    href: 'https://r3.emb.gov.ph',
+  },
+  {
+    icon: (props) => <IcoMail {...props} />,
+    label: 'Email',
+    value: 'emb.region3@emb.gov.ph',
+    href: 'mailto:emb.region3@emb.gov.ph',
+  },
+  {
+    icon: (props) => <IcoPhone {...props} />,
+    label: 'Telephone',
+    value: '(045) 455 5391',
+    href: 'tel:+63454555391',
+  },
+  {
+    icon: (props) => <IcoBuilding {...props} />,
+    label: 'Office',
+    value:
+      'Masinop cor. Matalino St., Diosdado Macapagal Government Center, Maimpis, City of San Fernando, Pampanga',
+  },
+];
+
+const ContactsModal = ({ open, onClose }) => {
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKey = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKey);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+      document.body.style.overflow = '';
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="welcome-modal-backdrop"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div
+        className="welcome-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="welcome-contacts-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="welcome-modal-close"
+          onClick={onClose}
+          aria-label="Close contact information"
+        >
+          <IcoClose size={18} />
+        </button>
+        <div className="welcome-modal-head">
+          <img src={embLogo} alt="" aria-hidden="true" />
+          <div>
+            <p className="welcome-modal-eyebrow">Restricted System Access</p>
+            <h3 id="welcome-contacts-title">Account Required</h3>
+          </div>
+        </div>
+        <p className="welcome-modal-lead">
+          The Water Quality Monitoring System is an internal EMB Region III
+          platform. Login is reserved for authorized personnel. For account
+          requests, system inquiries, or water quality data, please contact EMB
+          Region III through the details below.
+        </p>
+        <ul className="welcome-modal-contacts">
+          {EMB_CONTACTS.map(({ icon, label, value, href }) => (
+            <li key={label}>
+              <span className="welcome-modal-contact-icon">{icon({ size: 18 })}</span>
+              <div>
+                <small>{label}</small>
+                {href ? (
+                  <a href={href} target="_blank" rel="noreferrer">
+                    {value}
+                  </a>
+                ) : (
+                  <span>{value}</span>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+        <div className="welcome-modal-actions">
+          <Link to="/public-dashboard" className="welcome-primary-action">
+            Open Public Dashboard
+          </Link>
+          <button
+            type="button"
+            className="welcome-secondary-action"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Welcome = () => {
   const { theme, toggle } = useTheme();
   const isDark = theme === 'dark';
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const [contactsOpen, setContactsOpen] = useState(false);
 
   useEffect(() => {
     const io = new IntersectionObserver(
@@ -191,8 +305,20 @@ const Welcome = () => {
     return () => io.disconnect();
   }, []);
 
+  useEffect(() => {
+    const onScroll = () => setShowScrollTop(window.scrollY > 480);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const closeMobileNav = () => setMobileNavOpen(false);
+  const scrollToTop = () =>
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
   return (
     <main className="welcome-page">
+      <ContactsModal open={contactsOpen} onClose={() => setContactsOpen(false)} />
       <section
         className="welcome-hero"
         style={{ '--welcome-bg': `url(${bgEmb})` }}
@@ -220,12 +346,44 @@ const Welcome = () => {
               {isDark ? <IcoSun size={18} /> : <IcoMoon size={18} />}
               <span>{isDark ? 'Light' : 'Dark'}</span>
             </button>
-            <Link className="welcome-login-btn" to="/login">
+            <button className="welcome-login-btn" type="button" onClick={() => setContactsOpen(true)}>
               <IcoCheckCircle size={18} />
               <span>Login</span>
-            </Link>
+            </button>
+            <button
+              className="welcome-burger"
+              type="button"
+              onClick={() => setMobileNavOpen((open) => !open)}
+              aria-label={mobileNavOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={mobileNavOpen}
+            >
+              {mobileNavOpen ? <IcoClose size={22} /> : <IcoMenu size={22} />}
+            </button>
           </div>
         </header>
+
+        {mobileNavOpen && (
+          <div className="welcome-mobile-nav" role="dialog" aria-label="Mobile navigation">
+            <a href="#features" onClick={closeMobileNav}>Features</a>
+            <a href="#map-preview" onClick={closeMobileNav}>3D Map</a>
+            <a href="#ai-assistant" onClick={closeMobileNav}>AI Assistant</a>
+            <a href="#menus" onClick={closeMobileNav}>Menus</a>
+            <Link to="/public-dashboard" className="welcome-mobile-publink" onClick={closeMobileNav}>
+              Public Dashboard
+            </Link>
+            <button
+              type="button"
+              className="welcome-mobile-login"
+              onClick={() => {
+                closeMobileNav();
+                setContactsOpen(true);
+              }}
+            >
+              <IcoCheckCircle size={18} />
+              <span>Staff Login</span>
+            </button>
+          </div>
+        )}
 
         <div className="welcome-hero-grid">
           <div className="welcome-hero-copy">
@@ -235,7 +393,7 @@ const Welcome = () => {
               A corporate monitoring platform for waterbody stations, parameter readings, AI-assisted forecasts, and 3D geospatial review across Central Luzon.
             </p>
             <div className="welcome-actions">
-              <Link className="welcome-primary-action" to="/login">Access System</Link>
+              <button className="welcome-primary-action" type="button" onClick={() => setContactsOpen(true)}>Access System</button>
               <a className="welcome-secondary-action" href="#map-preview">View Sample Preview</a>
             </div>
           </div>
@@ -262,50 +420,6 @@ const Welcome = () => {
                 </Suspense>
               </div>
             </div>
-
-            {/* Smaller screen — Dashboard mockup */}
-            {/* <div className="welcome-device welcome-tablet-screen welcome-tablet-dashboard" aria-label="Dashboard interface mockup">
-              <div className="welcome-screen-bar">
-                <span />
-                <span />
-                <span />
-                <strong>Dashboard</strong>
-              </div>
-              <div className="welcome-screen-layout">
-                <div className="welcome-screen-sidebar">
-                  <span className="active"><IcoDashboard size={14} /> Dashboard</span>
-                  <span><IcoLayers size={14} /> 3D Map</span>
-                  <span><IcoTrendUp size={14} /> AI Forecast</span>
-                </div>
-                <div className="welcome-screen-main">
-                  <div className="welcome-dashboard-head">
-                    <span>Sample Waterbody</span>
-                    <strong>Class C Monitoring</strong>
-                  </div>
-                  <div className="welcome-screen-metrics">
-                    {dashboardMetrics.map(([label, value, color]) => (
-                      <span key={label} style={{ '--metric-color': color }}>
-                        <small>{label}</small>
-                        <strong>{value}</strong>
-                      </span>
-                    ))}
-                  </div>
-                  <div className="welcome-screen-chart">
-                    <span className="bar b1" />
-                    <span className="bar b2" />
-                    <span className="bar b3" />
-                    <span className="bar b4" />
-                    <span className="bar b5" />
-                    <span className="chart-line" />
-                  </div>
-                  <div className="welcome-screen-table">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                </div>
-              </div>
-            </div> */}
           </div>
         </div>
 
@@ -357,7 +471,7 @@ const Welcome = () => {
             <span className="welcome-map-note-icon"><IcoLayers size={22} /></span>
             <h3>Sample waterbody preview</h3>
             <p>The interactive 3D aerial map is shown on the device in the hero section above, with an inclined terrain view, station markers, layer tools, and station detail cards.</p>
-            <Link className="welcome-secondary-action welcome-map-note-action" to="/login">Open Full 3D Map</Link>
+            <button className="welcome-secondary-action welcome-map-note-action" type="button" onClick={() => setContactsOpen(true)}>Request Full Access</button>
           </div>
           <div className="welcome-station-panel">
             {sampleStations.map((station) => (
@@ -456,6 +570,15 @@ const Welcome = () => {
           <span>EMB R3 WQMS</span>
         </div>
       </footer>
+
+      <button
+        type="button"
+        className={`welcome-scroll-top${showScrollTop ? ' is-visible' : ''}`}
+        onClick={scrollToTop}
+        aria-label="Scroll back to top"
+      >
+        <IcoArrowUp size={20} />
+      </button>
     </main>
   );
 };

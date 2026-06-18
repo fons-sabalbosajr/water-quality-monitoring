@@ -4,6 +4,7 @@ import { ConfigProvider, theme as antdTheme } from 'antd';
 import { AuthProvider } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import embLogo from './assets/emblogo.svg';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
@@ -14,9 +15,17 @@ const Home = lazy(() => import('./pages/Home'));
 const PublicDashboard = lazy(() => import('./pages/PublicDashboard'));
 
 const AppLoading = () => (
-  <div className="app-loading" role="status" aria-live="polite">
-    <span />
-    Loading EMBR3-WQMS...
+  <div className="app-splash" role="status" aria-live="polite">
+    <div className="app-splash-card">
+      {/* <img src={embLogo} alt="Environmental Management Bureau Region III" className="app-splash-logo" /> */}
+      <div className="app-splash-ring" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+      <p className="app-splash-title">Water Quality Monitoring System</p>
+      <p className="app-splash-sub">Preparing your dashboard…</p>
+    </div>
   </div>
 );
 

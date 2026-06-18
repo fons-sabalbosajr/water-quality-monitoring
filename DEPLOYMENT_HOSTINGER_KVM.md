@@ -103,9 +103,13 @@ PORT=5002
 MONGO_URI=mongodb://127.0.0.1:27017/embr3_wqms
 JWT_SECRET=replace-with-a-long-random-secret
 MAPTILER_API_KEY=replace-if-available
-GEMINI_API_KEY=optional-google-ai-key
-GEMINI_MODEL=gemini-2.5-flash
 ```
+
+> AI forecasting now runs entirely in the browser using a Prophet-style additive
+> model (linear trend + seasonal decomposition + widening confidence band). No
+> external AI API key is required. The legacy `GEMINI_API_KEY` / `GEMINI_MODEL`
+> variables are optional and only affect the `/api/water/forecast/status`
+> diagnostic endpoint — they are not needed for forecasts to work.
 
 If email features are used:
 
@@ -282,8 +286,13 @@ If the 3D map does not show MapTiler imagery:
 
 If forecast features fail:
 
-- Confirm `GEMINI_API_KEY` exists if AI forecast endpoints are used.
-- Confirm the local technical forecasts still show without AI configuration.
+- AI forecasts are computed client-side (in-browser), so they do not depend on
+  any server AI key. Confirm the dashboard, public dashboard, and tabular
+  forecast panels render without backend AI configuration.
+- The forecast horizon (1–3 months) is set in **Developer Manager → AI Forecast**
+  and applies immediately across all forecast charts and menus.
+- The legacy `GEMINI_API_KEY` only affects the optional
+  `/water-quality-monitoring/api/water/forecast/status` diagnostic.
 
 If MongoDB fails:
 

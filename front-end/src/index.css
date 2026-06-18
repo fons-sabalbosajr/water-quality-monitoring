@@ -104,6 +104,87 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* ── Branded splash for lazy dashboard load ── */
+.app-splash {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(68,106,203,0.12), transparent 60%),
+    radial-gradient(circle at 80% 80%, rgba(124,182,117,0.12), transparent 55%),
+    var(--bg-base, #f1f5f9);
+  animation: appSplashFade 0.4s ease;
+}
+
+.app-splash-card {
+  display: grid;
+  justify-items: center;
+  gap: 0.65rem;
+  text-align: center;
+  padding: 2rem 2.6rem;
+}
+
+.app-splash-logo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  animation: appSplashPulse 1.8s ease-in-out infinite;
+}
+
+.app-splash-ring {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  margin: 0.4rem 0 0.2rem;
+}
+
+.app-splash-ring span {
+  position: absolute;
+  inset: 0;
+  border: 3px solid transparent;
+  border-top-color: #446ACB;
+  border-radius: 50%;
+  animation: appLoadingSpin 1s linear infinite;
+}
+
+.app-splash-ring span:nth-child(2) {
+  inset: 7px;
+  border-top-color: #7CB675;
+  animation-duration: 1.4s;
+  animation-direction: reverse;
+}
+
+.app-splash-ring span:nth-child(3) {
+  inset: 14px;
+  border-top-color: #f59e0b;
+  animation-duration: 1.8s;
+}
+
+.app-splash-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-primary, #1f2937);
+}
+
+.app-splash-sub {
+  margin: 0;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-secondary, #64748b);
+  letter-spacing: 0.02em;
+}
+
+@keyframes appSplashFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes appSplashPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.82; }
+}
+
 a {
   text-decoration: none;
   color: inherit;

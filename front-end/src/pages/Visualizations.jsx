@@ -10,8 +10,9 @@ import {
   MONTHS_SHORT, PARAM_LIMITS, fmt, getAvailableParams,
   getLatestNumber, getMonthlyNumber, getParamData,
 } from '../utils/wqmData';
-import { loadStationLocations } from '../utils/stationWorkbook';
-import { buildWaterbodyOptions, getReadableStations, usePublishedWqmDataset } from '../utils/wqmSheets';
+import { loadStationLocationsCached } from '../utils/stationWorkbook';
+import { buildWaterbodyOptions, getReadableStations, groupWaterbodyByProvince, usePublishedWqmDataset } from '../utils/wqmSheets';
+import { useForecastMonths } from '../utils/forecastSettings';
 import encryptedStorage from '../utils/encryptedStorage';
 import './Visualizations.css';
 
@@ -118,7 +119,7 @@ const regression = (points) => {
   ];
 };
 
-const buildTechnicalForecast = (observed) => {
+const buildTechnicalForecast = (observed, horizon = 3) => {
   if (!observed.length) {
     return {
       points: [],
@@ -148,7 +149,7 @@ const buildTechnicalForecast = (observed) => {
   const confidence = Math.max(45, Math.min(94, 92 - ((rmse / scale) * 100)));
   const trend = Math.abs(slope) < 0.01 ? 'stable' : slope > 0 ? 'increasing' : 'decreasing';
 
-  const points = Array.from({ length: 3 }, (_, index) => {
+  const points = Array.from({ length: Math.max(1, horizon) }, (_, index) => {
     const x = indexed.length + index;
     const forecast = Number(((slope * x) + intercept).toFixed(4));
     const band = rmse * (1.15 + (index * 0.2));
@@ -206,8 +207,8 @@ const fitFourierSeasonal = (residuals, period) => {
 // (trend) component plus a Fourier seasonal component, then projects both
 // forward with an uncertainty interval that widens with the horizon — mirroring
 // the behaviour of Facebook/Meta Prophet for short monthly series.
-const buildProphetForecast = (observed) => {
-  if (observed.length < 3) return buildTechnicalForecast(observed);
+const buildProphetForecast = (observed, horizon = 3) => {
+  if (observed.length < 3) return buildTechnicalForecast(observed, horizon);
 
   const indexed = observed.map((point, index) => ({ x: index, y: point.actual }));
   const latest = observed.at(-1)?.actual ?? null;
@@ -234,7 +235,7 @@ const buildProphetForecast = (observed) => {
   const confidence = Math.max(48, Math.min(96, 95 - ((rmse / signalScale) * 100)));
   const trend = Math.abs(slope) < 0.01 ? 'stable' : slope > 0 ? 'increasing' : 'decreasing';
 
-  const points = Array.from({ length: 3 }, (_, index) => {
+  const points = Array.from({ length: Math.max(1, horizon) }, (_, index) => {
     const x = indexed.length + index;
     const forecast = Number((trendAt(x) + seasonalAt(x)).toFixed(4));
     const band = (rmse * (1.28 + (index * 0.25))) + (seasonalAmplitude * 0.25);
@@ -310,6 +311,7 @@ const VisualizationView = ({ type }) => {
   const [forecastStationKey, setForecastStationKey] = useState('');
   const [forecastExpandedKey, setForecastExpandedKey] = useState('');
   const [forecastEngine, setForecastEngine] = useState('prophet');
+  const forecastMonths = useForecastMonths();
   const currentMonthIndex = useMemo(() => getCurrentMonthIndex(stations, params), [params, stations]);
   const periodLabel = selectedSheet?.periodLabels?.[currentMonthIndex] || MONTHS_SHORT[currentMonthIndex];
   const currentMonthLabel = currentMonthIndex >= 0 ? `${periodLabel} ${visualizationYear}` : 'latest available data';
@@ -322,7 +324,7 @@ const VisualizationView = ({ type }) => {
 
   useEffect(() => {
     let cancelled = false;
-    loadStationLocations().then((locations) => {
+    loadStationLocationsCached().then((locations) => {
       if (!cancelled) setStationLocations(locations);
     }).catch(() => {
       if (!cancelled) setStationLocations([]);
@@ -490,12 +492,12 @@ const VisualizationView = ({ type }) => {
 
     const buildForecast = (FORECAST_ENGINES[forecastEngine] || FORECAST_ENGINES.prophet).build;
     return visibleForecastParams
-      .map((param) => {
+      .map((param, cardIndex) => {
         const observed = MONTHS_SHORT.map((month, index) => ({
           month,
           actual: getMonthlyNumber(getParamData(activeForecastStation, param), index),
         })).filter((point) => point.actual !== null);
-        const technical = buildForecast(observed);
+        const technical = buildForecast(observed, forecastMonths);
         // Bridge the forecast onto the last observed reading so the (differently
         // coloured) forecast line connects to the current readings instead of
         // starting from a detached point.
@@ -506,13 +508,14 @@ const VisualizationView = ({ type }) => {
         ));
         return {
           param,
+          color: COLORS[cardIndex % COLORS.length],
           observed,
           diagnostics: technical.diagnostics,
           data: bridged.concat(technical.points),
         };
       })
       .filter((card) => card.observed.length);
-  }, [activeForecastStation, visibleForecastParams, forecastEngine]);
+  }, [activeForecastStation, visibleForecastParams, forecastEngine, forecastMonths]);
   const hiddenForecastCount = Math.max(0, forecastParamCandidates.length - forecastCards.length);
   const activeForecastLabel = (FORECAST_ENGINES[forecastEngine] || FORECAST_ENGINES.prophet).tag;
 
@@ -588,7 +591,11 @@ const VisualizationView = ({ type }) => {
         <label>
           <span>Waterbody</span>
           <select value={activeWaterbodyKey} onChange={(event) => setWaterbodyKey(event.target.value)}>
-            {WATERBODIES.map((waterbody) => <option key={waterbody.key} value={waterbody.key}>{waterbody.name}</option>)}
+            {groupWaterbodyByProvince(WATERBODIES).map(({ province, items }) => (
+              <optgroup key={province} label={province}>
+                {items.map((waterbody) => <option key={waterbody.key} value={waterbody.key}>{waterbody.name}</option>)}
+              </optgroup>
+            ))}
           </select>
         </label>
       </section>
@@ -757,7 +764,7 @@ const VisualizationView = ({ type }) => {
                     value,
                     label: engine.label,
                   }))}
-                  popupClassName="wqm-map-select-popup"
+                  classNames={{ popup: { root: 'wqm-map-select-popup' } }}
                   getPopupContainer={(trigger) => trigger.parentElement}
                 />
               </label>
@@ -772,7 +779,7 @@ const VisualizationView = ({ type }) => {
                   }))}
                   showSearch
                   optionFilterProp="label"
-                  popupClassName="wqm-map-select-popup"
+                  classNames={{ popup: { root: 'wqm-map-select-popup' } }}
                   getPopupContainer={(trigger) => trigger.parentElement}
                 />
               </label>
@@ -782,13 +789,18 @@ const VisualizationView = ({ type }) => {
           {forecastParamCandidates.length ? (
             <div className="forecast-param-grid">
               {forecastCards.map((card) => (
-                <Card key={card.param} className="forecast-param-card" size="small">
+                <Card
+                  key={card.param}
+                  className="forecast-param-card"
+                  size="small"
+                  style={{ '--fc-accent': card.color }}
+                >
                   <div className="forecast-param-head">
                     <div>
                       <h4>{card.param}</h4>
-                      <p>{activeForecastStation?.stnId} - {card.observed.length} monthly values</p>
+                      <p>{activeForecastStation?.stnId} · {card.observed.length} months · +{forecastMonths}mo forecast</p>
                     </div>
-                    <Statistic value={fmt(card.diagnostics.latest)} />
+                    <Statistic value={fmt(card.diagnostics.latest)} valueStyle={{ color: card.color }} />
                   </div>
                   <div className="forecast-tech-grid compact">
                     <Card size="small">
@@ -801,19 +813,25 @@ const VisualizationView = ({ type }) => {
                     </Card>
                     <Card size="small">
                       <Statistic title="Confidence" value={card.diagnostics.confidence} suffix="%" />
-                      <small>{card.diagnostics.method}</small>
+                      <small>model fit</small>
                     </Card>
                   </div>
-                  <ResponsiveContainer width="100%" height={260}>
-                    <AreaChart data={card.data}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="month" tick={CHART_TICK} />
-                      <YAxis tick={CHART_TICK} />
-                      <Tooltip />
-                      <Area dataKey="actual" name="Observed station value" stroke="#446ACB" fill="#446ACB" fillOpacity={0.14} isAnimationActive={false} />
-                      <Line dataKey="upper" name="Upper RMSE band" stroke="#f59e0b" strokeOpacity={0.42} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
-                      <Line dataKey="lower" name="Lower RMSE band" stroke="#f59e0b" strokeOpacity={0.42} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
-                      <Area dataKey="forecast" name="Forecast" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.16} strokeDasharray="6 4" isAnimationActive={false} />
+                  <ResponsiveContainer width="100%" height={170}>
+                    <AreaChart data={card.data} margin={{ top: 4, right: 6, left: -18, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id={`fcObs-${card.param.replace(/\W/g, '')}`} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor={card.color} stopOpacity={0.28} />
+                          <stop offset="95%" stopColor={card.color} stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                      <XAxis dataKey="month" tick={CHART_TICK} tickLine={false} axisLine={false} />
+                      <YAxis tick={CHART_TICK} tickLine={false} axisLine={false} width={42} />
+                      <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                      <Area dataKey="actual" name="Observed" stroke={card.color} strokeWidth={2} fill={`url(#fcObs-${card.param.replace(/\W/g, '')})`} isAnimationActive={false} connectNulls />
+                      <Line dataKey="upper" name="Upper band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive={false} />
+                      <Line dataKey="lower" name="Lower band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive={false} />
+                      <Line dataKey="forecast" name="Forecast" stroke="#f59e0b" strokeWidth={2.4} strokeDasharray="6 4" dot={{ r: 2.5, fill: '#f59e0b' }} isAnimationActive={false} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </Card>

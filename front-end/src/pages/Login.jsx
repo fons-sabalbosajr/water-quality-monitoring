@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { Alert, Button, Form, Input } from 'antd';
+import { LockOutlined, MailOutlined } from '@ant-design/icons';
 import { useAuth } from '../context/AuthContext';
 import { logActivity } from '../utils/appLog';
 import bagongLogo from '../assets/bagongpilipinaslogo.png';
@@ -10,20 +12,15 @@ const Login = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  const [form, setForm] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleChange = (e) =>
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (values) => {
     setError('');
     setLoading(true);
     try {
-      const user = await login(form.email, form.password);
-      logActivity('Signed in', { email: form.email }, user);
+      const user = await login(values.email, values.password);
+      logActivity('Signed in', { email: values.email }, user);
       navigate('/dashboard', { replace: true });
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed. Please try again.');
@@ -52,44 +49,59 @@ const Login = () => {
         <h2 className="login-heading">Sign In</h2>
 
         {error && (
-          <div className="alert alert-error" role="alert">
-            <span>⚠</span> {error}
-          </div>
+          <Alert
+            type="error"
+            showIcon
+            title={error}
+            style={{ marginBottom: 16 }}
+          />
         )}
 
-        <form onSubmit={handleSubmit} noValidate>
-          <div className="form-group">
-            <label htmlFor="email">Email Address</label>
-            <input
-              id="email"
-              type="email"
-              name="email"
-              value={form.email}
-              onChange={handleChange}
+        <Form
+          layout="vertical"
+          requiredMark={false}
+          onFinish={handleSubmit}
+          autoComplete="on"
+        >
+          <Form.Item
+            label="Email Address"
+            name="email"
+            rules={[
+              { required: true, message: 'Please enter your email.' },
+              { type: 'email', message: 'Enter a valid email address.' },
+            ]}
+          >
+            <Input
+              size="large"
+              prefix={<MailOutlined />}
               placeholder="you@example.com"
-              required
               autoComplete="email"
             />
-          </div>
+          </Form.Item>
 
-          <div className="form-group">
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              name="password"
-              value={form.password}
-              onChange={handleChange}
+          <Form.Item
+            label="Password"
+            name="password"
+            rules={[{ required: true, message: 'Please enter your password.' }]}
+          >
+            <Input.Password
+              size="large"
+              prefix={<LockOutlined />}
               placeholder="••••••••"
-              required
               autoComplete="current-password"
             />
-          </div>
+          </Form.Item>
 
-          <button type="submit" className="btn-primary" disabled={loading}>
+          <Button
+            type="primary"
+            htmlType="submit"
+            size="large"
+            block
+            loading={loading}
+          >
             {loading ? 'Signing in…' : 'Sign In'}
-          </button>
-        </form>
+          </Button>
+        </Form>
 
         <p className="login-footer">
           <Link to="/forgot-password">Forgot your password?</Link>

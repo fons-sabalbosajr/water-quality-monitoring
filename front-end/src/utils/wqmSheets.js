@@ -11,6 +11,99 @@ export const WQM_PUBLISHED_YEAR_EVENT = 'wqms:visualization-year';
 export const WQM_YEAR_OPTIONS = [2026, 2025, 2024];
 export const DEFAULT_WQM_YEAR = 2026;
 
+// ── Custom monitoring-year templates (e.g. 2027, 2028) ─────────────────────
+// Admins/developers can create new monitoring plans for future years from the
+// Tabular Results page. Each custom year is stored locally as its own encrypted
+// draft (wqm_{year}_drafts) and registered in this list so the navigation can
+// surface it.
+export const CUSTOM_YEARS_KEY = 'wqms_custom_tabular_years';
+export const CUSTOM_YEARS_EVENT = 'wqms:custom-years';
+
+export const getCustomTabularYears = () => {
+  try {
+    const list = encryptedStorage.getItem(CUSTOM_YEARS_KEY);
+    return Array.isArray(list)
+      ? [...new Set(list.map(Number).filter((y) => Number.isInteger(y)))]
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+export const getAllTabularYears = () =>
+  [...new Set([...WQM_YEAR_OPTIONS, ...getCustomTabularYears()])].sort(
+    (a, b) => b - a,
+  );
+
+export const isCustomTabularYear = (year) =>
+  getCustomTabularYears().includes(Number(year));
+
+// Build empty sheets (no readings) for a new monitoring year from a set of
+// existing waterbody sheets, preserving station structure & parameter columns.
+export const buildBlankYearSheets = (sourceSheets, selectedKeys) => {
+  const keys = new Set(selectedKeys);
+  return sourceSheets
+    .filter((sheet) => keys.has(sheet.key))
+    .map((sheet) => ({
+      key: sheet.key,
+      name: sheet.name,
+      classInfo: sheet.classInfo || '',
+      periodLabels: sheet.periodLabels,
+      stations: getStations(sheet).map((station) => ({
+        stnNo: station.stnNo,
+        stnId: station.stnId,
+        address: station.address,
+        params: Object.fromEntries(
+          Object.keys(station.params || {}).map((param) => [
+            param,
+            { monthly: Array(12).fill(null), avg: null },
+          ]),
+        ),
+      })),
+    }));
+};
+
+export const createTabularYear = (year, sheets) => {
+  const numericYear = Number(year);
+  if (!Number.isInteger(numericYear)) return false;
+  encryptedStorage.setItem(`wqm_${numericYear}_drafts`, sheets);
+  if (
+    !WQM_YEAR_OPTIONS.includes(numericYear) &&
+    !getCustomTabularYears().includes(numericYear)
+  ) {
+    encryptedStorage.setItem(CUSTOM_YEARS_KEY, [
+      ...getCustomTabularYears(),
+      numericYear,
+    ]);
+  }
+  window.dispatchEvent(new CustomEvent(CUSTOM_YEARS_EVENT, { detail: numericYear }));
+  return true;
+};
+
+export const removeTabularYear = (year) => {
+  const numericYear = Number(year);
+  encryptedStorage.removeItem(`wqm_${numericYear}_drafts`);
+  encryptedStorage.setItem(
+    CUSTOM_YEARS_KEY,
+    getCustomTabularYears().filter((y) => y !== numericYear),
+  );
+  window.dispatchEvent(new CustomEvent(CUSTOM_YEARS_EVENT, { detail: numericYear }));
+};
+
+export const useTabularYears = () => {
+  const [years, setYears] = useState(getAllTabularYears);
+  useEffect(() => {
+    const refresh = () => setYears(getAllTabularYears());
+    window.addEventListener(CUSTOM_YEARS_EVENT, refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener(CUSTOM_YEARS_EVENT, refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
+  return years;
+};
+
 export const WQM_WATERBODY_GROUPS = [
   {
     label: 'Priority Water Bodies',
@@ -127,6 +220,24 @@ export const publishWqmYear = (nextYear) => {
 
 export const getReadableStations = (sheet) => getStations(sheet).filter(hasNumericReading);
 
+// All valid station records for a sheet, including newly added stations that do
+// not yet have any numeric readings. Used by the Waterbody Profiles editor so
+// freshly created stations can be assigned coordinates.
+export const getAllStations = (sheet) => getStations(sheet);
+
+// Display-name override applied from the Waterbody Profiles "Profile Name"
+// setting so renamed waterbodies appear consistently across the whole app.
+export const getWaterbodyProfileName = (key, fallback) => {
+  try {
+    const profiles = encryptedStorage.getItem('wqms_waterbody_profile_settings') || {};
+    const profile = profiles[key];
+    const name = profile?.profileName || profile?.assignedWaterbody;
+    return (name && String(name).trim()) || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 export const useWqmSheets = () => {
   const [sheets, setSheets] = useState(getStoredWqmSheets);
 
@@ -134,9 +245,14 @@ export const useWqmSheets = () => {
     const refresh = () => setSheets(getStoredWqmSheets());
     window.addEventListener(WQM_DRAFTS_EVENT, refresh);
     window.addEventListener('storage', refresh);
+    // Refresh when a waterbody profile name/assignment changes so renamed
+    // waterbodies update everywhere immediately (new array reference forces
+    // dependent buildWaterbodyOptions() memos to recompute with the new name).
+    window.addEventListener('wqms:waterbody-profile-settings', refresh);
     return () => {
       window.removeEventListener(WQM_DRAFTS_EVENT, refresh);
       window.removeEventListener('storage', refresh);
+      window.removeEventListener('wqms:waterbody-profile-settings', refresh);
     };
   }, []);
 
@@ -228,7 +344,7 @@ export const buildWaterbodyOptions = (sheets) => sheets
     const groupInfo = getWaterbodyGroupInfo(sheet.key, fallbackIndex);
     return {
       key: sheet.key,
-      name: sheet.name,
+      name: getWaterbodyProfileName(sheet.key, sheet.name),
       classInfo: sheet.classInfo || '',
       stations: getReadableStations(sheet),
       group: groupInfo.group,

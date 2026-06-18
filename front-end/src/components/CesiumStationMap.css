@@ -44,14 +44,12 @@
   z-index: 1;
   width: min(236px, calc(100% - 94px));
   max-height: none;
-  overflow-y: auto;
+  overflow: hidden;
   border: 1px solid rgba(255,255,255,0.18);
   border-radius: 0.65rem;
   background: rgba(15,23,42,0.82);
   color: #e2e8f0;
   backdrop-filter: blur(12px);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.2) transparent;
   pointer-events: auto;
 }
 
@@ -287,6 +285,20 @@
   box-shadow: 0 0 0 4px rgba(255,255,255,0.08);
 }
 
+.station-pin-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 0.86rem;
+  font-weight: 800;
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.16), 0 4px 12px rgba(0,0,0,0.3);
+}
+
 .cesium-station-card-title small {
   display: block;
   color: #93c5fd;
@@ -300,7 +312,7 @@
 .cesium-station-card-title strong {
   display: block;
   color: #fff;
-  font-size: 1rem;
+  font-size: 0.94rem;
   line-height: 1.2;
   overflow-wrap: anywhere;
 }
@@ -309,40 +321,139 @@
   width: 100%;
 }
 
+.station-status-tag {
+  font-weight: 500;
+  margin-inline-end: 0;
+}
+
+.station-coord-tag {
+  font-variant-numeric: tabular-nums;
+  margin-inline-end: 0;
+}
+
 .station-address {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.3rem;
   color: #cbd5e1;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
+.station-address .anticon {
+  margin-top: 0.12rem;
+  color: #7CB675;
+}
+
 .cesium-quality-list {
   display: grid;
-  gap: 0.48rem;
+  gap: 0.5rem;
 }
 
 .quality-row {
   display: grid;
-  gap: 0.32rem;
+  gap: 0.3rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.5rem;
+  background: rgba(255,255,255,0.04);
 }
 
 .quality-row > div {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 0.7rem;
+  
 }
 
-.quality-row span {
-  color: #cbd5e1;
-  font-size: 0.68rem;
+.quality-param {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+  color: #e2e8f0;
+  font-size: 11px;
   line-height: 1.25;
+  font-weight: 700;
+}
+
+.quality-param .ant-badge-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  margin-bottom: 1px;
 }
 
 .quality-row strong {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.32rem;
   color: #fff;
-  font-size: 0.72rem;
+  font-size: 11px;
   white-space: nowrap;
+}
+
+.quality-month {
+  color: #94a3b8;
+  font-size: 0.54rem;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Dashboard map preview uses a smaller, denser station card than the larger
+   dedicated maps. */
+.dashboard-cesium-map .cesium-station-card {
+  width: min(320px, calc(100% - 1.5rem));
+  padding: 0.55rem;
+}
+
+.dashboard-cesium-map .cesium-station-card .ant-card-head {
+  padding: 0 0.45rem;
+}
+
+.dashboard-cesium-map .cesium-station-card .ant-card-body {
+  padding: 0.5rem;
+}
+
+.dashboard-cesium-map .station-pin-badge {
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 0.76rem;
+}
+
+.dashboard-cesium-map .cesium-station-card-title small {
+  font-size: 0.56rem;
+}
+
+.dashboard-cesium-map .cesium-station-card-title strong {
+  font-size: 0.86rem;
+}
+
+.dashboard-cesium-map .station-status-tag,
+.dashboard-cesium-map .station-coord-tag {
+  font-size: 0.67rem;
+}
+
+.dashboard-cesium-map .station-address {
+  font-size: 0.63rem;
+}
+
+.dashboard-cesium-map .quality-row {
+  padding: 0.28rem 0.42rem;
+}
+
+.dashboard-cesium-map .quality-param {
+  font-size: 0.58rem;
+}
+
+.dashboard-cesium-map .quality-row strong {
+  font-size: 0.6rem;
+}
+
+.dashboard-cesium-map .quality-month {
+  font-size: 0.5rem;
 }
 
 .quality-row .ant-progress {

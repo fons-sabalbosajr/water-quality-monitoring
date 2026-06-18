@@ -179,6 +179,55 @@
   line-height: 1.25;
 }
 
+.nav-sub-add {
+  color: var(--accent, #7aa3e5);
+  font-weight: 700;
+}
+
+.nav-sub-add:hover {
+  color: #fff;
+  background: rgba(122, 163, 229, 0.18);
+}
+
+/* Access-restricted fallback inside the content area */
+.settings-denied {
+  display: grid;
+  place-items: center;
+  gap: 0.5rem;
+  text-align: center;
+  max-width: 460px;
+  margin: 3rem auto;
+  padding: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--bg-card);
+}
+
+.settings-denied .denied-icon {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  background: #fef2f2;
+  color: #dc2626;
+  font-size: 1.4rem;
+  font-weight: 800;
+}
+
+.settings-denied h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.settings-denied p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
 /* Waterbody sub-item dot */
 .nav-wb-dot {
   width: 5px;
@@ -1388,6 +1437,16 @@ tbody tr:hover {
   text-align: right;
 }
 
+.chart-param-control-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.chart-param-control-row .chart-param-antd {
+  flex: 1;
+}
+
 .chart-title {
   font-size: 1rem;
   font-weight: 700;
@@ -1820,7 +1879,20 @@ tbody tr:hover {
   justify-content: flex-end;
 }
 
-.map-tool-actions button,
+/* Reset button uses the antd Button look — keep it aligned with the Select
+   and don't let the generic button rule below distort it. */
+.map-tool-actions .map-reset-btn.ant-btn {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 0.5rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding-inline: 0.85rem;
+}
+
+.map-tool-actions button:not(.ant-btn),
 .map-tool-actions span {
   min-height: 32px;
   border: 1px solid var(--border);
@@ -1832,19 +1904,19 @@ tbody tr:hover {
   padding: 0.32rem 0.52rem;
 }
 
-.map-tool-actions button {
+.map-tool-actions button:not(.ant-btn) {
   cursor: pointer;
 }
 
-.map-tool-actions button:hover,
-.map-tool-actions button.active {
+.map-tool-actions button:not(.ant-btn):hover,
+.map-tool-actions button:not(.ant-btn).active {
   border-color: #446ACB;
   color: #253C78;
   background: #EEF0FB;
 }
 
-[data-theme='dark'] .map-tool-actions button:hover,
-[data-theme='dark'] .map-tool-actions button.active {
+[data-theme='dark'] .map-tool-actions button:not(.ant-btn):hover,
+[data-theme='dark'] .map-tool-actions button:not(.ant-btn).active {
   color: #93c5fd;
   background: rgba(68,106,203,0.18);
 }
@@ -2533,7 +2605,7 @@ select.observation-month-filter {
   color: var(--text-primary);
 }
 
-[data-theme='dark'] .map-tool-actions button,
+[data-theme='dark'] .map-tool-actions button:not(.ant-btn),
 [data-theme='dark'] .map-tool-actions span {
   background: var(--bg-base);
   border-color: var(--border);

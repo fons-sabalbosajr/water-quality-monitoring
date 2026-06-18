@@ -789,7 +789,8 @@
 .wqm-station-summary span,
 .wqm-muted {
   color: var(--text-secondary);
-  font-size: 0.72rem;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .wqm-latest-list {
@@ -838,6 +839,22 @@
   font-weight: 700;
 }
 
+.waterbody-modal-grid {
+  grid-template-columns: 1fr;
+  gap: 0.65rem;
+}
+
+.waterbody-modal-grid span {
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+.waterbody-modal-grid .ant-input,
+.waterbody-modal-grid .ant-input-disabled {
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
 .parameter-editor-wrap {
   max-height: 68vh;
   overflow: auto;
@@ -863,7 +880,7 @@
   background: #253C78;
   color: #fff;
   font-size: 0.64rem;
-  font-weight: 800;
+  font-weight: 600;
   padding: 0.45rem 0.5rem;
   text-align: center;
   white-space: nowrap;
@@ -885,21 +902,21 @@
   min-width: 58px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  font-size: 0.86rem;
-  font-weight: 700;
+  font-size: 0.84rem;
+  font-weight: 500;
 }
 
 .parameter-editor-ant-table .parameter-observation-input,
 .parameter-editor-ant-table .parameter-observation-input.ant-input-disabled {
-  min-width: 150px;
+  min-width: 100px;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: break-word;
   text-align: left;
-  line-height: 1.35;
+  line-height: 1.45;
   resize: vertical;
-  font-size: 0.86rem;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 400;
 }
 
 [data-theme='dark'] .parameter-editor-ant-table .ant-table,
@@ -996,15 +1013,25 @@
   display: grid;
   gap: 0.05rem;
   color: var(--text-primary);
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.2;
-  font-size: 0.9rem;
+  font-size: 12px;
 }
 
 .wqm-param-text small {
   color: var(--text-secondary);
   font-size: 0.62rem;
   font-weight: 600;
+}
+
+.wqm-param-text strong {
+  font-weight: 600;
+}
+
+.wqm-wqg-tag {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  margin-inline-end: 0;
 }
 
 .wqm-ant-input.center input,

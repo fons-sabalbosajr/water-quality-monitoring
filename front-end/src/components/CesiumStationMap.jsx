@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Badge,
   Button,
   Card,
   Progress,
@@ -61,6 +62,30 @@ import './CesiumStationMap.css';
 
 const ionToken = import.meta.env.VITE_CESIUM_ION_TOKEN || '';
 Ion.defaultAccessToken = ionToken;
+
+// Session-scoped, in-memory cache for the MapTiler key lookup.
+// The map mounts on several pages (dashboard, 3D map, public dashboard, landing
+// preview); without caching each mount issues a fresh `/water/maptiler-key`
+// request. The resolved promise is reused so the lookup runs at most once per
+// session. The key is held only in memory (never persisted to localStorage),
+// and on failure the cache is cleared so a later mount can retry.
+let mapTilerKeyCache = null;
+
+const fetchMapTilerKeyCached = () => {
+  if (!mapTilerKeyCache) {
+    mapTilerKeyCache = api
+      .get('/water/maptiler-key')
+      .then(({ data }) => ({
+        key: data?.key || '',
+        configured: Boolean(data?.configured),
+      }))
+      .catch((error) => {
+        mapTilerKeyCache = null;
+        throw error;
+      });
+  }
+  return mapTilerKeyCache;
+};
 
 const normalizeForMatch = (value) => String(value || '')
   .normalize('NFD')
@@ -166,20 +191,70 @@ const getStationAddress = (location) => (
   [location.barangay, location.province].filter(Boolean).join(', ') || 'Address not specified'
 );
 
-const getMarkerSvg = (color = '#f97316') => {
+const getMarkerSvg = (color = '#f97316', number = null) => {
   const safeColor = /^#[0-9a-f]{6}$/i.test(color) ? color : '#f97316';
+  const badge = number !== null && number !== undefined && number !== ''
+    ? `<text x="32" y="34" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="${safeColor}">${number}</text>`
+    : `<path d="M20 30c3.5 0 3.5 3 7 3s3.5-3 7-3 3.5 3 7 3 3.5-3 7-3" fill="none" stroke="${safeColor}" stroke-width="4" stroke-linecap="round"/><circle cx="32" cy="23" r="3.8" fill="${safeColor}"/>`;
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="64" height="76" viewBox="0 0 64 76">
       <filter id="shadow" x="-30%" y="-20%" width="160%" height="160%">
         <feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#020617" flood-opacity=".42"/>
       </filter>
       <path filter="url(#shadow)" d="M32 4C18.2 4 7 15.1 7 28.8 7 48.6 32 72 32 72s25-23.4 25-43.2C57 15.1 45.8 4 32 4z" fill="${safeColor}"/>
-      <circle cx="32" cy="29" r="15" fill="#fff" opacity=".95"/>
-      <path d="M20 30c3.5 0 3.5 3 7 3s3.5-3 7-3 3.5 3 7 3 3.5-3 7-3" fill="none" stroke="${safeColor}" stroke-width="4" stroke-linecap="round"/>
-      <circle cx="32" cy="23" r="3.8" fill="${safeColor}"/>
+      <circle cx="32" cy="29" r="15" fill="#fff" opacity=".97"/>
+      ${badge}
     </svg>
   `;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+};
+
+// Distinct marker palette so adjacent stations within a waterbody are easy to
+// tell apart on the map.
+const MARKER_PALETTE = [
+  '#446ACB', '#7CB675', '#e07b54', '#a855f7', '#f59e0b',
+  '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#14b8a6',
+  '#6366f1', '#ef4444',
+];
+
+// Status-driven marker colour used when a station has live monitoring data.
+const STATUS_MARKER_COLOR = {
+  alert: '#ef4444',
+  watch: '#f59e0b',
+  safe: '#16a34a',
+  nodata: '#64748b',
+};
+
+const getMarkerColorForLocation = (location, index) => {
+  if (location.markerColor && /^#[0-9a-f]{6}$/i.test(location.markerColor)) {
+    return location.markerColor;
+  }
+  return MARKER_PALETTE[index % MARKER_PALETTE.length];
+};
+
+// De-duplicate stations that share the exact same coordinates (e.g. ASFMSRS
+// rows that resolve to one fallback point) by nudging overlapping markers along
+// a small spiral so each station stays individually clickable.
+const dedupeLocationCoordinates = (locations) => {
+  const seen = new Map();
+  return locations.map((location) => {
+    if (!Number.isFinite(location.lat) || !Number.isFinite(location.lng)) {
+      return location;
+    }
+    const coordKey = `${location.lat.toFixed(5)},${location.lng.toFixed(5)}`;
+    const count = seen.get(coordKey) || 0;
+    seen.set(coordKey, count + 1);
+    if (count === 0) return location;
+    // ~12-18m spiral offset per collision; large enough to separate pins,
+    // small enough to keep the station near its true location.
+    const angle = count * 2.39996; // golden angle for even spread
+    const radius = 0.00016 * Math.ceil(count / 6 + 1);
+    return {
+      ...location,
+      lat: location.lat + radius * Math.cos(angle),
+      lng: location.lng + radius * Math.sin(angle),
+    };
+  });
 };
 
 const getStationMetrics = (station) => {
@@ -301,7 +376,9 @@ const CesiumStationMap = ({
   const [selectedLocation, setSelectedLocation] = useState(null);
 
   const safeLocations = useMemo(() => (
-    (locations || []).filter((location) => Number.isFinite(location.lat) && Number.isFinite(location.lng))
+    dedupeLocationCoordinates(
+      (locations || []).filter((location) => Number.isFinite(location.lat) && Number.isFinite(location.lng)),
+    )
   ), [locations]);
   const labelsVisible = labelsEnabled && showStationLabels;
   const canUseIon = Boolean(ionToken);
@@ -348,11 +425,10 @@ const CesiumStationMap = ({
   useEffect(() => {
     if (mapTiler.key) return;
     let cancelled = false;
-    api.get('/water/maptiler-key')
-      .then(({ data }) => {
+    fetchMapTilerKeyCached()
+      .then(({ key, configured }) => {
         if (cancelled) return;
-        const nextKey = data?.key || '';
-        setMapTiler({ key: nextKey, configured: Boolean(data?.configured) });
+        setMapTiler({ key, configured });
       })
       .catch(() => {
         if (!cancelled) setMapTiler({ key: '', configured: false });
@@ -613,7 +689,10 @@ const CesiumStationMap = ({
     safeLocations.forEach((location, index) => {
       const stationName = getStationName(location, index);
       const stationEntityId = `station-${location.id || 'point'}-${index}`;
-      const markerColor = location.markerColor || '#f97316';
+      const markerColor = getMarkerColorForLocation(location, index);
+      const markerNumber = location.markerNumber
+        ?? location.stationData?.stnNo
+        ?? (index + 1);
       const position = Cartesian3.fromDegrees(location.lng, location.lat, 28 + (index % 4) * 9);
       const groundPosition = Cartesian3.fromDegrees(location.lng, location.lat, 0);
 
@@ -635,16 +714,16 @@ const CesiumStationMap = ({
         name: stationName,
         position,
         description: [
-          `<strong>${waterbodyName}</strong>`,
+          `<strong>${location.waterbodyName || waterbodyName}</strong>`,
           `<br/>Station: ${stationName}`,
           `<br/>Barangay/Province: ${getStationAddress(location)}`,
           `<br/>Coordinates: ${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`,
           Number.isFinite(location.fecal) ? `<br/>Fecal Coliform: ${location.fecal}` : '',
         ].join(''),
         billboard: {
-          image: getMarkerSvg(markerColor),
-          width: 26,
-          height: 31,
+          image: getMarkerSvg(markerColor, markerNumber),
+          width: 30,
+          height: 36,
           verticalOrigin: VerticalOrigin.BOTTOM,
           heightReference: HeightReference.RELATIVE_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
@@ -652,41 +731,53 @@ const CesiumStationMap = ({
         label: {
           text: stationName,
           show: labelsVisible,
-          font: '700 13px Segoe UI, Arial, sans-serif',
+          font: '600 12px Segoe UI, Arial, sans-serif',
           fillColor: Color.WHITE,
-          outlineColor: Color.BLACK,
-          outlineWidth: 4,
+          outlineColor: Color.fromCssColorString(markerColor),
+          outlineWidth: 3,
           style: LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset: new Cartesian2(0, -24),
+          showBackground: true,
+          backgroundColor: Color.fromCssColorString('#0f172a').withAlpha(0.72),
+          backgroundPadding: new Cartesian2(7, 4),
+          pixelOffset: new Cartesian2(0, -30),
           verticalOrigin: VerticalOrigin.BOTTOM,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
-      entityLocationsRef.current.set(stationEntityId, location);
-    });
-
-    mapLabels.forEach((group, index) => {
-      viewer.entities.add({
-        id: `waterbody-label-${index}`,
-        name: group.label,
-        position: Cartesian3.fromDegrees(group.lng, group.lat, 130),
-        label: {
-          text: group.label,
-          show: labelsEnabled,
-          font: '600 14px Segoe UI, Arial, sans-serif',
-          fillColor: Color.CYAN,
-          outlineColor: Color.BLACK,
-          outlineWidth: 3,
-          style: LabelStyle.FILL_AND_OUTLINE,
-          showBackground: true,
-          backgroundColor: Color.BLACK.withAlpha(0.5),
-          backgroundPadding: new Cartesian2(9, 6),
-          pixelOffset: new Cartesian2(0, 34),
-          verticalOrigin: VerticalOrigin.CENTER,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
+      entityLocationsRef.current.set(stationEntityId, {
+        ...location,
+        markerColor,
+        markerNumber,
       });
     });
+
+    // Only render waterbody centroid labels when more than one distinct
+    // waterbody is shown — a single waterbody name is already in the header and
+    // the redundant centroid label overlaps the station pins.
+    if (mapLabels.length > 1) {
+      mapLabels.forEach((group, index) => {
+        viewer.entities.add({
+          id: `waterbody-label-${index}`,
+          name: group.label,
+          position: Cartesian3.fromDegrees(group.lng, group.lat, 130),
+          label: {
+            text: group.label,
+            show: labelsEnabled,
+            font: '600 14px Segoe UI, Arial, sans-serif',
+            fillColor: Color.CYAN,
+            outlineColor: Color.BLACK,
+            outlineWidth: 3,
+            style: LabelStyle.FILL_AND_OUTLINE,
+            showBackground: true,
+            backgroundColor: Color.BLACK.withAlpha(0.5),
+            backgroundPadding: new Cartesian2(9, 6),
+            pixelOffset: new Cartesian2(0, 44),
+            verticalOrigin: VerticalOrigin.CENTER,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+      });
+    }
 
     focusStationBounds(viewer, safeLocations, 0.85, birdseye);
   }, [birdseye, labelsEnabled, labelsVisible, safeLocations, waterbodyName]);
@@ -798,7 +889,7 @@ const CesiumStationMap = ({
                         setLayer(value);
                       }}
                       options={mapLayerOptions.map(([value, label]) => ({ value, label }))}
-                      popupClassName="wqm-map-select-popup"
+                      classNames={{ popup: { root: 'wqm-map-select-popup' } }}
                       getPopupContainer={(trigger) => trigger.parentElement}
                       aria-label="Map imagery layer"
                     />
@@ -840,7 +931,12 @@ const CesiumStationMap = ({
               size="small"
               title={(
                 <Space align="center" className="cesium-station-card-title">
-                  <span className="station-color-bar" style={{ background: selectedLocation.markerColor || '#f97316' }} />
+                  <span
+                    className="station-pin-badge"
+                    style={{ background: selectedLocation.markerColor || '#446ACB' }}
+                  >
+                    {selectedLocation.markerNumber ?? selectedLocation.stationData?.stnNo ?? '•'}
+                  </span>
                   <span>
                     <small>{selectedLocation.waterbodyName || waterbodyName}</small>
                     <strong>{getStationName(selectedLocation, 0)}</strong>
@@ -849,20 +945,40 @@ const CesiumStationMap = ({
               )}
               extra={<Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setSelectedLocation(null)} aria-label="Close station monitoring card" />}
             >
-              <Space direction="vertical" size="small" className="cesium-station-card-content">
-                <Space wrap>
-                  <Tag color={selectedStatus === 'alert' ? 'red' : selectedStatus === 'watch' ? 'gold' : selectedStatus === 'safe' ? 'green' : 'default'}>
+              <Space orientation="vertical" size="small" className="cesium-station-card-content">
+                <Space wrap size={6}>
+                  <Tag
+                    className="station-status-tag"
+                    color={selectedStatus === 'alert' ? 'red' : selectedStatus === 'watch' ? 'gold' : selectedStatus === 'safe' ? 'green' : 'default'}
+                  >
                     {getStatusLabel(selectedStatus)}
                   </Tag>
-                  <Tag icon={<EnvironmentOutlined />}>{selectedLocation.lat.toFixed(6)}, {selectedLocation.lng.toFixed(6)}</Tag>
+                  <Tag icon={<EnvironmentOutlined />} className="station-coord-tag">
+                    {selectedLocation.lat.toFixed(5)}, {selectedLocation.lng.toFixed(5)}
+                  </Tag>
                 </Space>
-                <span className="station-address">{getStationAddress(selectedLocation)}</span>
+                <span className="station-address">
+                  <EnvironmentOutlined /> {getStationAddress(selectedLocation)}
+                </span>
                 <div className="cesium-quality-list">
                   {selectedMetrics.map((metric) => (
                     <div className={`quality-row ${metric.status}`} key={metric.param}>
                       <div>
-                        <span>{metric.param}</span>
-                        <strong>{metric.label}</strong>
+                        <span className="quality-param">
+                          <Badge
+                            status={
+                              metric.status === 'alert' ? 'error'
+                              : metric.status === 'watch' ? 'warning'
+                              : metric.status === 'safe' ? 'success'
+                              : 'default'
+                            }
+                          />
+                          {metric.param}
+                        </span>
+                        <strong>
+                          {metric.label}
+                          <em className="quality-month">{metric.monthLabel}</em>
+                        </strong>
                       </div>
                       <Progress
                         percent={Math.round(metric.percent)}

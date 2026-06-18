@@ -3,22 +3,40 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
+import { Tag, Tooltip as AntTooltip } from 'antd';
+import {
+  CheckCircleFilled,
+  CloseCircleFilled,
+  MinusCircleOutlined,
+  WarningFilled,
+} from '@ant-design/icons';
 import {
   MONTHS_SHORT, OBSERVATION_PARAM, PARAM_LIMITS, fmt, fmtWithUnit, getAvailableParams,
   getAverageNumber, getGaugePercent, getLatestNumber, getObservationEntries,
   getMonthlyNumber, getParamData, getParamStatus, getParamUnit, toTitle,
 } from '../utils/wqmData';
-import { getReadableStations, useWqmSheets } from '../utils/wqmSheets';
+import { getReadableStations, getWaterbodyProfileName, useWqmSheets } from '../utils/wqmSheets';
 import './WaterbodyProfile.css';
 
 const STN_COLORS = ['#446ACB','#7CB675','#e07b54','#a78bfa','#f59e0b','#06b6d4','#ec4899','#84cc16'];
+
+// Visual status descriptor for the Annual Summary cells.
+const SUMMARY_STATUS = {
+  alert: { color: '#dc2626', tag: 'red', label: 'Exceeds limit', icon: <CloseCircleFilled /> },
+  watch: { color: '#d97706', tag: 'gold', label: 'Near limit', icon: <WarningFilled /> },
+  safe: { color: '#16a34a', tag: 'green', label: 'Within limit', icon: <CheckCircleFilled /> },
+  nodata: { color: '#94a3b8', tag: 'default', label: 'No data', icon: <MinusCircleOutlined /> },
+};
 
 const WaterbodyProfile = ({ waterbodyKey, year = 2026, sheets: providedSheets = null }) => {
   const localSheets = useWqmSheets();
   const sheets = providedSheets || localSheets;
   const sheetData = sheets.find((sheet) => sheet.key === waterbodyKey);
   const stations = useMemo(() => getReadableStations(sheetData), [sheetData]);
-  const waterbodyName = sheetData?.name ? sheetData.name : toTitle(waterbodyKey);
+  const waterbodyName = getWaterbodyProfileName(
+    waterbodyKey,
+    sheetData?.name ? sheetData.name : toTitle(waterbodyKey),
+  );
   const classLabel = sheetData?.classInfo?.match(/CLASS\s+(\S+)/)?.[1] || '';
 
   const availableParams = useMemo(() => {
@@ -66,6 +84,36 @@ const WaterbodyProfile = ({ waterbodyKey, year = 2026, sheets: providedSheets = 
       };
     }).filter((metric) => metric.value !== null),
   })), [gaugeParams, stations]);
+
+  // Annual-average compliance summary used by the redesigned Annual Summary
+  // panel: per-station status counts plus per-cell status descriptors.
+  const annualSummary = useMemo(() => {
+    const perStation = stations.map((station) => {
+      let alert = 0;
+      let watch = 0;
+      let safe = 0;
+      let nodata = 0;
+      numericParams.forEach((param) => {
+        const value = getAverageNumber(getParamData(station, param));
+        const status = value === null ? 'nodata' : getParamStatus(param, value);
+        if (status === 'alert') alert += 1;
+        else if (status === 'watch') watch += 1;
+        else if (status === 'nodata') nodata += 1;
+        else safe += 1;
+      });
+      const overall = alert > 0 ? 'alert' : watch > 0 ? 'watch' : (safe > 0 ? 'safe' : 'nodata');
+      return { station, alert, watch, safe, nodata, overall };
+    });
+    const totals = perStation.reduce(
+      (acc, row) => ({
+        alert: acc.alert + row.alert,
+        watch: acc.watch + row.watch,
+        safe: acc.safe + row.safe,
+      }),
+      { alert: 0, watch: 0, safe: 0 },
+    );
+    return { perStation, totals };
+  }, [numericParams, stations]);
 
   // Monthly chart data for selected parameter (one line per station)
   const chartData = useMemo(() => {
@@ -278,38 +326,70 @@ const WaterbodyProfile = ({ waterbodyKey, year = 2026, sheets: providedSheets = 
       {/* Annual Summary Table */}
       <div className="wb-summary-card">
         <div className="wb-summary-header">
-          <h3 className="wb-summary-title">Annual Summary</h3>
-          <p className="wb-summary-sub">Annual average values per monitoring station</p>
+          <div>
+            <h3 className="wb-summary-title">Annual Summary</h3>
+            <p className="wb-summary-sub">Annual average values with water quality guideline status</p>
+          </div>
+          <div className="wb-summary-legend">
+            <Tag color="green" icon={<CheckCircleFilled />}>{annualSummary.totals.safe} within limit</Tag>
+            <Tag color="gold" icon={<WarningFilled />}>{annualSummary.totals.watch} near limit</Tag>
+            <Tag color="red" icon={<CloseCircleFilled />}>{annualSummary.totals.alert} exceeds</Tag>
+          </div>
         </div>
         <div className="wb-summary-wrap">
           <table className="wb-summary-table">
             <thead>
               <tr>
                 <th className="wbs-th-param">Parameter</th>
-                {stations.map((s) => (
-                  <th key={s.stnId} className="wbs-th-stn">
-                    <span className="wbs-stn-id">{s.stnId}</span>
-                  </th>
-                ))}
+                {stations.map((s, sIdx) => {
+                  const overall = annualSummary.perStation[sIdx]?.overall || 'nodata';
+                  const meta = SUMMARY_STATUS[overall];
+                  return (
+                    <th key={s.stnId} className="wbs-th-stn">
+                      <AntTooltip title={`${meta.label} (overall)`}>
+                        <span className="wbs-stn-id">
+                          <span className="wbs-stn-dot" style={{ background: meta.color }} />
+                          {s.stnId}
+                        </span>
+                      </AntTooltip>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
-              {numericParams.map((param, pIdx) => (
-                <tr key={param} className={pIdx % 2 === 0 ? 'wbs-even' : 'wbs-odd'}>
-                  <td className="wbs-td-param">{param}</td>
-                  {stations.map((stn) => {
-                    const p = getParamData(stn, param);
-                    return (
-                      <td
-                        key={stn.stnId}
-                        className={`wbs-td-val${!p || p.avg === null ? ' wbs-null' : ''}`}
-                      >
-                        {fmt(getAverageNumber(p))}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+              {numericParams.map((param, pIdx) => {
+                const limit = PARAM_LIMITS[param];
+                const limitLabel = limit
+                  ? [limit.min !== undefined ? `≥${limit.min}` : null, limit.max !== undefined ? `≤${limit.max}` : null]
+                      .filter(Boolean)
+                      .join(' ')
+                  : '';
+                return (
+                  <tr key={param} className={pIdx % 2 === 0 ? 'wbs-even' : 'wbs-odd'}>
+                    <td className="wbs-td-param">
+                      <span className="wbs-param-name">{param}</span>
+                      {limitLabel && <span className="wbs-param-limit">{limitLabel}</span>}
+                    </td>
+                    {stations.map((stn) => {
+                      const p = getParamData(stn, param);
+                      const value = getAverageNumber(p);
+                      const status = value === null ? 'nodata' : getParamStatus(param, value);
+                      const meta = SUMMARY_STATUS[status];
+                      return (
+                        <td key={stn.stnId} className="wbs-td-val">
+                          <AntTooltip title={meta.label}>
+                            <span className="wbs-val-chip" style={{ color: meta.color }}>
+                              <span className="wbs-val-icon">{meta.icon}</span>
+                              <span className="wbs-val-num">{value === null ? '—' : fmt(value)}</span>
+                            </span>
+                          </AntTooltip>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -3,24 +3,47 @@ import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import {
   Alert,
+  Avatar,
+  Badge,
   Button,
   Card,
   Col,
-  Empty,
-  InputNumber,
-  Popconfirm,
+  Descriptions,
+  Divider,
+  Form,
+  Input,
+  Modal,
+  Progress,
   Row,
+  Segmented,
+  Select,
   Space,
   Statistic,
+  Switch,
   Table,
   Tag,
   Tooltip,
 } from "antd";
 import {
   CheckCircleOutlined,
+  CheckOutlined,
+  CloseCircleOutlined,
+  CloudServerOutlined,
+  DatabaseOutlined,
+  DeleteOutlined,
+  DownloadOutlined,
+  EditOutlined,
+  EnvironmentOutlined,
+  FileTextOutlined,
   LineChartOutlined,
+  MailOutlined,
   ReloadOutlined,
+  SafetyOutlined,
+  SendOutlined,
   SettingOutlined,
+  TeamOutlined,
+  UploadOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import {
   Bar,
@@ -38,10 +61,10 @@ import {
 } from "recharts";
 import api from "../api/axios";
 import encryptedStorage from "../utils/encryptedStorage";
-import { loadStationLocations } from "../utils/stationWorkbook";
+import { loadStationLocationsCached } from "../utils/stationWorkbook";
 import {
   buildWaterbodyOptions,
-  getReadableStations,
+  getAllStations,
   getStoredWqmSheets,
   groupWaterbodyByProvince,
   publishWqmYear,
@@ -52,6 +75,11 @@ import {
   useWqmSheets,
 } from "../utils/wqmSheets";
 import { clearAppLogs, getAppLogs, logActivity } from "../utils/appLog";
+import {
+  getForecastMonths,
+  setForecastMonths as setForecastMonthsSetting,
+} from "../utils/forecastSettings";
+import { confirmAction, toastSaved, alertError } from "../utils/swal";
 import "./Settings.css";
 
 const ROLES = ["user", "developer", "admin"];
@@ -64,7 +92,6 @@ const VISUALIZATION_YEAR_OPTIONS = WQM_YEAR_OPTIONS.map((year) => [
   String(year),
   year === 2026 ? "2026 active dataset" : `${year} MongoDB dataset`,
 ]);
-const TABLE_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const ACCESS_FEATURES = [
   ["dashboard", "Dashboard", "user"],
@@ -135,79 +162,6 @@ const matchStationLocation = (station, waterbody, stationLocations) => {
   );
 };
 
-const usePaginatedRows = (rows, defaultPageSize = 10) => {
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(defaultPageSize);
-  const total = rows.length;
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const safePage = Math.min(Math.max(1, page), pageCount);
-  const start = (safePage - 1) * pageSize;
-  const pagedRows = rows.slice(start, start + pageSize);
-
-  return {
-    page: safePage,
-    pageSize,
-    pageCount,
-    total,
-    start,
-    rows: pagedRows,
-    setPage,
-    setPageSize: (nextSize) => {
-      setPageSize(nextSize);
-      setPage(1);
-    },
-  };
-};
-
-const TablePagination = ({ pagination, label = "Rows" }) => {
-  if (!pagination.total) return null;
-  const first = pagination.total ? pagination.start + 1 : 0;
-  const last = Math.min(
-    pagination.start + pagination.pageSize,
-    pagination.total,
-  );
-
-  return (
-    <div className="settings-pagination" aria-label={`${label} pagination`}>
-      <span>
-        {first}-{last} of {pagination.total}
-      </span>
-      <label>
-        <span>Page size</span>
-        <select
-          value={pagination.pageSize}
-          onChange={(event) =>
-            pagination.setPageSize(Number(event.target.value))
-          }
-        >
-          {TABLE_PAGE_SIZE_OPTIONS.map((size) => (
-            <option key={size} value={size}>
-              {size}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button
-        type="button"
-        disabled={pagination.page <= 1}
-        onClick={() => pagination.setPage(pagination.page - 1)}
-      >
-        Prev
-      </button>
-      <strong>
-        {pagination.page} / {pagination.pageCount}
-      </strong>
-      <button
-        type="button"
-        disabled={pagination.page >= pagination.pageCount}
-        onClick={() => pagination.setPage(pagination.page + 1)}
-      >
-        Next
-      </button>
-    </div>
-  );
-};
-
 const getStoredAccessSettings = () => {
   try {
     const stored = encryptedStorage.getItem("wqms_access_settings");
@@ -225,11 +179,6 @@ const getStoredAccessSettings = () => {
 };
 
 const USER_ACCESS_KEY = "wqms_user_access";
-const ACCESS_OVERRIDE_OPTIONS = [
-  ["default", "Role default"],
-  ["allow", "Allow"],
-  ["deny", "Deny"],
-];
 
 const getUserAccessOverrides = () => {
   try {
@@ -239,9 +188,19 @@ const getUserAccessOverrides = () => {
   }
 };
 
-const ManageAccessSettings = ({ currentUser }) => {
+const ACCESS_ROLE_RANK = { user: 1, developer: 2, admin: 3 };
+
+// Whether a role is allowed into a feature by the global minimum-role rule.
+const isDefaultFeatureAllowed = (feature, role) => {
+  const settings = getStoredAccessSettings();
+  return (
+    (ACCESS_ROLE_RANK[role] || 0) >=
+    (ACCESS_ROLE_RANK[settings[feature] || "user"] || 1)
+  );
+};
+
+const ManageAccessModal = ({ open, onClose, currentUser }) => {
   const [settings, setSettings] = useState(getStoredAccessSettings);
-  const [saved, setSaved] = useState("");
 
   const updateAccess = (feature, role) => {
     const next = { ...settings, [feature]: role };
@@ -250,37 +209,46 @@ const ManageAccessSettings = ({ currentUser }) => {
     window.dispatchEvent(
       new CustomEvent("wqms:access-settings", { detail: next }),
     );
-    setSaved("Access settings saved.");
+    toastSaved("Access settings saved.");
     logActivity("Updated app access settings", { feature, role }, currentUser);
   };
 
   return (
-    <div className="access-settings-panel">
-      <div className="access-settings-head">
-        <div>
-          <h4>Manage Access Settings</h4>
-          <p>Set the minimum role allowed to open major app areas.</p>
-        </div>
-        {saved && <span onAnimationEnd={() => setSaved("")}>{saved}</span>}
-      </div>
-      <div className="access-settings-grid">
+    <Modal
+      open={open}
+      onCancel={onClose}
+      title={
+        <Space>
+          <SafetyOutlined />
+          <span>Global Access Settings</span>
+        </Space>
+      }
+      footer={
+        <Button type="primary" onClick={onClose}>
+          Done
+        </Button>
+      }
+      width={560}
+    >
+      <p style={{ marginTop: 0, color: "var(--text-muted, #6b7280)", fontSize: 13 }}>
+        Set the minimum role allowed to open each major app area. Changes apply
+        immediately for all accounts.
+      </p>
+      <Row gutter={[12, 12]}>
         {ACCESS_FEATURES.map(([key, label]) => (
-          <label key={key}>
-            <span>{label}</span>
-            <select
-              value={settings[key]}
-              onChange={(event) => updateAccess(key, event.target.value)}
-            >
-              {ROLES.map((role) => (
-                <option key={role} value={role}>
-                  {role}
-                </option>
-              ))}
-            </select>
-          </label>
+          <Col xs={24} sm={12} key={key}>
+            <div style={{ display: "grid", gap: 4 }}>
+              <span style={{ fontSize: 12, fontWeight: 600 }}>{label}</span>
+              <Select
+                value={settings[key]}
+                onChange={(value) => updateAccess(key, value)}
+                options={ROLES.map((role) => ({ value: role, label: role }))}
+              />
+            </div>
+          </Col>
         ))}
-      </div>
-    </div>
+      </Row>
+    </Modal>
   );
 };
 
@@ -341,35 +309,45 @@ const VisualizationYearSettings = ({ currentUser }) => {
   };
 
   return (
-    <div className="access-settings-panel">
-      <div className="access-settings-head">
-        <div>
-          <h4>Published WQM Year</h4>
-          <p>
-            Sets the WQM dataset used by dashboard, visual analytics, and
-            monitoring. The selection is saved in MongoDB and shared across
-            sessions.
-          </p>
-        </div>
-        {saved && <span onAnimationEnd={() => setSaved("")}>{saved}</span>}
-      </div>
-      <div className="access-settings-grid compact">
-        <label>
-          <span>WQM Year to Publish</span>
-          <select
-            value={year}
-            disabled={loading}
-            onChange={(event) => updateYear(event.target.value)}
-          >
-            {VISUALIZATION_YEAR_OPTIONS.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-    </div>
+    <Card
+      variant="borderless"
+      size="small"
+      title={
+        <Space>
+          <DatabaseOutlined />
+          <span>Published WQM Year</span>
+        </Space>
+      }
+    >
+      <p
+        style={{
+          margin: "0 0 12px",
+          fontSize: 13,
+          color: "var(--text-muted, #6b7280)",
+        }}
+      >
+        Sets the WQM dataset used by dashboard, visual analytics, and monitoring.
+        The selection is saved in MongoDB and shared across sessions.
+      </p>
+      <Space wrap align="center">
+        <Select
+          value={year}
+          disabled={loading}
+          loading={loading}
+          onChange={(value) => updateYear(value)}
+          style={{ minWidth: 220 }}
+          options={VISUALIZATION_YEAR_OPTIONS.map(([value, label]) => ({
+            value,
+            label,
+          }))}
+        />
+        {saved && (
+          <Tag color="success" icon={<CheckCircleOutlined />}>
+            {saved}
+          </Tag>
+        )}
+      </Space>
+    </Card>
   );
 };
 
@@ -384,7 +362,8 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
       return {};
     }
   });
-  const [saved, setSaved] = useState("");
+  const [editStation, setEditStation] = useState(null);
+  const [profileOpen, setProfileOpen] = useState(false);
   const provinceGroups = useMemo(() => groupWaterbodyByProvince(waterbodies), [waterbodies]);
   const activeKey = waterbodies[0]?.key || "";
   const [selectedKey, setSelectedKey] = useState(activeKey);
@@ -394,17 +373,22 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     (sheet) => sheet.key === selectedWaterbody?.key,
   );
   const selectedStations = useMemo(
-    () => getReadableStations(selectedSheet),
+    () => getAllStations(selectedSheet),
     [selectedSheet],
   );
-  const stationPagination = usePaginatedRows(selectedStations, 10);
   const current = settings[selectedWaterbody?.key] || {};
-  const stationAssignments = current.stationAssignments || {};
-  const stationOverrides = current.stationOverrides || {};
+  const stationAssignments = useMemo(
+    () => current.stationAssignments || {},
+    [current.stationAssignments],
+  );
+  const stationOverrides = useMemo(
+    () => current.stationOverrides || {},
+    [current.stationOverrides],
+  );
 
   useEffect(() => {
     let cancelled = false;
-    loadStationLocations()
+    loadStationLocationsCached()
       .then((locations) => {
         if (!cancelled) setStationLocations(locations);
       })
@@ -439,7 +423,6 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     window.dispatchEvent(
       new CustomEvent("wqms:waterbody-profile-settings", { detail: next }),
     );
-    setSaved("Waterbody profile settings saved.");
     logActivity(
       "Updated waterbody profile settings",
       { waterbody: selectedWaterbody.name, field },
@@ -447,8 +430,15 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     );
   };
 
-  const deleteWaterbody = () => {
+  const deleteWaterbody = async () => {
     if (!selectedWaterbody) return;
+    const confirmed = await confirmAction({
+      title: `Delete "${selectedWaterbody.name}"?`,
+      text: "This removes the waterbody from the local dataset. This cannot be undone without a page reload.",
+      confirmButtonText: "Yes, delete",
+      danger: true,
+    });
+    if (!confirmed) return;
     const currentSheets = getStoredWqmSheets();
     const filtered = currentSheets.filter((s) => s.key !== selectedWaterbody.key);
     saveStoredWqmSheets(filtered);
@@ -466,7 +456,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
       { waterbody: selectedWaterbody.name },
       currentUser,
     );
-    setSaved(`"${selectedWaterbody.name}" removed from the local dataset.`);
+    toastSaved(`"${selectedWaterbody.name}" removed from the local dataset.`);
   };
 
   const updateStationAssignment = (station, targetWaterbodyKey) => {
@@ -500,269 +490,347 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     updateSetting("stationOverrides", nextOverrides);
   };
 
+  const stationRows = useMemo(
+    () =>
+      selectedStations.map((station) => {
+        const assignmentKey = getStationAssignmentKey(
+          selectedWaterbody?.key,
+          station,
+        );
+        const assignedKey =
+          stationAssignments[assignmentKey] || selectedWaterbody?.key;
+        const override = stationOverrides[assignmentKey] || {};
+        const location = matchStationLocation(
+          station,
+          selectedWaterbody,
+          stationLocations,
+        );
+        const lat =
+          override.lat ??
+          (Number.isFinite(location?.lat) ? String(location.lat) : "");
+        const lng =
+          override.lng ??
+          (Number.isFinite(location?.lng) ? String(location.lng) : "");
+        return {
+          key: assignmentKey,
+          station,
+          stnNo: station.stnNo,
+          name: override.name ?? station.stnId ?? "",
+          address: override.address ?? station.address ?? "",
+          lat,
+          lng,
+          assignedKey,
+        };
+      }),
+    [selectedStations, selectedWaterbody, stationAssignments, stationOverrides, stationLocations],
+  );
+
+  const waterbodyName = (key) =>
+    waterbodies.find((w) => w.key === key)?.name || "—";
+
+  const stationColumns = [
+    { title: "No.", dataIndex: "stnNo", key: "stnNo", width: 60 },
+    {
+      title: "Station",
+      dataIndex: "name",
+      key: "name",
+      render: (name) => <strong style={{ fontWeight: 600 }}>{name || "—"}</strong>,
+    },
+    {
+      title: "Coordinates",
+      key: "coords",
+      render: (_, row) =>
+        row.lat && row.lng ? (
+          <Tag icon={<EnvironmentOutlined />}>{row.lat}, {row.lng}</Tag>
+        ) : (
+          <Tag>Not set</Tag>
+        ),
+    },
+    {
+      title: "Address",
+      dataIndex: "address",
+      key: "address",
+      responsive: ["lg"],
+      render: (address) => address || <em style={{ color: "#94a3b8" }}>—</em>,
+    },
+    {
+      title: "Assigned Waterbody",
+      dataIndex: "assignedKey",
+      key: "assignedKey",
+      render: (key) => (
+        <Tag color={key === selectedWaterbody?.key ? "default" : "geekblue"}>
+          {waterbodyName(key)}
+        </Tag>
+      ),
+    },
+    {
+      title: "Actions",
+      key: "actions",
+      width: 90,
+      render: (_, row) => (
+        <Button
+          size="small"
+          type="primary"
+          icon={<EditOutlined />}
+          onClick={() => setEditStation(row)}
+        >
+          Edit
+        </Button>
+      ),
+    },
+  ];
+
+  const saveStationEdit = () => {
+    toastSaved("Station updated.");
+    setEditStation(null);
+  };
+
   return (
     <div className="waterbody-settings-panel">
-      <div className="settings-toolbar">
-        <label className="settings-field">
-          <span>Waterbody</span>
-          <select
-            value={selectedWaterbody?.key || ""}
-            onChange={(event) => setSelectedKey(event.target.value)}
-          >
-            {provinceGroups.map(({ province, items }) => (
-              <optgroup key={province} label={province}>
-                {items.map((waterbody) => (
-                  <option key={waterbody.key} value={waterbody.key}>
-                    {waterbody.name}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </label>
-        <Popconfirm
-          title={`Delete "${selectedWaterbody?.name}"?`}
-          description="This removes the waterbody from the local 2026 dataset. This cannot be undone without a page reload."
-          okText="Yes, delete"
-          okButtonProps={{ danger: true }}
-          cancelText="Cancel"
-          onConfirm={deleteWaterbody}
-          placement="bottomLeft"
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          flexWrap: "wrap",
+          alignItems: "flex-end",
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: "grid", gap: 4, minWidth: 240 }}>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Waterbody</span>
+          <Select
+            showSearch
+            optionFilterProp="label"
+            value={selectedWaterbody?.key || undefined}
+            onChange={(value) => setSelectedKey(value)}
+            style={{ minWidth: 240 }}
+            options={provinceGroups.map(({ province, items }) => ({
+              label: province,
+              options: items.map((wb) => ({ value: wb.key, label: wb.name })),
+            }))}
+          />
+        </div>
+        <Button
+          icon={<EditOutlined />}
+          onClick={() => setProfileOpen(true)}
           disabled={!selectedWaterbody}
         >
-          <Button danger size="small" disabled={!selectedWaterbody}>
-            Delete Waterbody
-          </Button>
-        </Popconfirm>
-        {saved && (
-          <p className="email-status" onAnimationEnd={() => setSaved("")}>
-            {saved}
-          </p>
-        )}
+          Edit Profile
+        </Button>
+        <Button
+          danger
+          icon={<DeleteOutlined />}
+          onClick={deleteWaterbody}
+          disabled={!selectedWaterbody}
+        >
+          Delete Waterbody
+        </Button>
       </div>
+
       {selectedWaterbody && (
-        <div className="waterbody-settings-grid">
-          <label>
-            <span>Profile Name</span>
-            <input
-              value={current.profileName || selectedWaterbody.name}
-              onChange={(event) =>
-                updateSetting("profileName", event.target.value)
-              }
-            />
-          </label>
-          <label>
-            <span>Waterbody Assignment</span>
-            <input
-              value={current.assignedWaterbody || selectedWaterbody.name}
-              onChange={(event) =>
-                updateSetting("assignedWaterbody", event.target.value)
-              }
-            />
-          </label>
-          <label>
-            <span>Station Location Source</span>
-            <select
-              value={current.locationSource || "workbook"}
-              onChange={(event) =>
-                updateSetting("locationSource", event.target.value)
-              }
-            >
-              <option value="workbook">Workbook station list</option>
-              <option value="manual">Manual assignment</option>
-            </select>
-          </label>
-          <label>
-            <span>Profile Notes</span>
-            <textarea
-              value={current.notes || ""}
-              onChange={(event) => updateSetting("notes", event.target.value)}
-            />
-          </label>
-        </div>
-      )}
-      {selectedWaterbody && (
-        <div className="station-regroup-panel">
+        <>
           <div className="station-regroup-head">
             <div>
-              <h4>Station Regrouping</h4>
+              <h4>Station Regrouping &amp; Locations</h4>
               <p>
-                Move stations from this waterbody into another available
-                waterbody for profile and location organization.
+                Edit station names, coordinates, and addresses, or move stations
+                into another waterbody.
               </p>
             </div>
-            <span>{selectedStations.length} stations</span>
+            <Tag color="blue">{selectedStations.length} stations</Tag>
           </div>
-          <div className="station-regroup-table-wrap">
-            <table className="station-regroup-table">
-              <thead>
-                <tr>
-                  <th>No.</th>
-                  <th>Station</th>
-                  <th>Coordinates</th>
-                  <th>Address</th>
-                  <th>Assigned Waterbody</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stationPagination.rows.map((station) => {
-                  const assignmentKey = getStationAssignmentKey(
-                    selectedWaterbody.key,
-                    station,
-                  );
-                  const assignedKey =
-                    stationAssignments[assignmentKey] || selectedWaterbody.key;
-                  const override = stationOverrides[assignmentKey] || {};
-                  const location = matchStationLocation(
-                    station,
-                    selectedWaterbody,
-                    stationLocations,
-                  );
-                  const stationName = override.name ?? station.stnId ?? "";
-                  const stationAddress = override.address ?? station.address ?? "";
-                  const lat =
-                    override.lat ??
-                    (Number.isFinite(location?.lat)
-                      ? String(location.lat)
-                      : "");
-                  const lng =
-                    override.lng ??
-                    (Number.isFinite(location?.lng)
-                      ? String(location.lng)
-                      : "");
-                  return (
-                    <tr key={assignmentKey}>
-                      <td>{station.stnNo}</td>
-                      <td>
-                        <input
-                          value={stationName}
-                          onChange={(event) =>
-                            updateStationOverride(
-                              station,
-                              "name",
-                              event.target.value,
-                            )
-                          }
-                          aria-label={`Station name for ${station.stnId}`}
-                        />
-                      </td>
-                      <td>
-                        <div className="station-coordinate-fields">
-                          <label className="coord-field">
-                            <span>Lat</span>
-                            <input
-                              inputMode="decimal"
-                              placeholder="e.g. 14.9057"
-                              value={lat}
-                              onChange={(event) =>
-                                updateStationOverride(
-                                  station,
-                                  "lat",
-                                  event.target.value,
-                                )
-                              }
-                              aria-label={`Latitude for ${station.stnId}`}
-                            />
-                          </label>
-                          <label className="coord-field">
-                            <span>Lng</span>
-                            <input
-                              inputMode="decimal"
-                              placeholder="e.g. 121.0641"
-                              value={lng}
-                              onChange={(event) =>
-                                updateStationOverride(
-                                  station,
-                                  "lng",
-                                  event.target.value,
-                                )
-                              }
-                              aria-label={`Longitude for ${station.stnId}`}
-                            />
-                          </label>
-                        </div>
-                      </td>
-                      <td>
-                        <input
-                          value={stationAddress}
-                          placeholder="Barangay, Municipality, Province"
-                          onChange={(event) =>
-                            updateStationOverride(
-                              station,
-                              "address",
-                              event.target.value,
-                            )
-                          }
-                          aria-label={`Address for ${station.stnId}`}
-                        />
-                      </td>
-                      <td>
-                        <select
-                          value={assignedKey}
-                          onChange={(event) =>
-                            updateStationAssignment(station, event.target.value)
-                          }
-                        >
-                          {waterbodies.map((waterbody) => (
-                            <option key={waterbody.key} value={waterbody.key}>
-                              {waterbody.name}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {!selectedStations.length && (
-                  <tr>
-                    <td colSpan="5" className="empty-log-cell">
-                      No stations are available for this waterbody.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <TablePagination pagination={stationPagination} label="Stations" />
-        </div>
+          <Table
+            rowKey="key"
+            size="middle"
+            columns={stationColumns}
+            dataSource={stationRows}
+            pagination={{ pageSize: 10, showSizeChanger: true }}
+            scroll={{ x: "max-content" }}
+            locale={{ emptyText: "No stations are available for this waterbody." }}
+          />
+        </>
       )}
+
+      {/* Profile edit modal */}
+      <Modal
+        open={profileOpen}
+        onCancel={() => setProfileOpen(false)}
+        title={
+          <Space>
+            <EditOutlined />
+            <span>Edit Waterbody Profile</span>
+          </Space>
+        }
+        footer={
+          <Button
+            type="primary"
+            onClick={() => {
+              setProfileOpen(false);
+              toastSaved("Profile settings saved.");
+            }}
+          >
+            Done
+          </Button>
+        }
+        width={560}
+      >
+        {selectedWaterbody && (
+          <Form layout="vertical" style={{ marginTop: 8 }}>
+            <Form.Item label="Profile Name" style={{ marginBottom: 12 }}>
+              <Input
+                value={current.profileName || selectedWaterbody.name}
+                onChange={(e) => updateSetting("profileName", e.target.value)}
+              />
+            </Form.Item>
+            <Form.Item label="Waterbody Assignment" style={{ marginBottom: 12 }}>
+              <Input
+                value={current.assignedWaterbody || selectedWaterbody.name}
+                onChange={(e) =>
+                  updateSetting("assignedWaterbody", e.target.value)
+                }
+              />
+            </Form.Item>
+            <Form.Item label="Station Location Source" style={{ marginBottom: 12 }}>
+              <Select
+                value={current.locationSource || "workbook"}
+                onChange={(value) => updateSetting("locationSource", value)}
+                options={[
+                  { value: "workbook", label: "Workbook station list" },
+                  { value: "manual", label: "Manual assignment" },
+                ]}
+              />
+            </Form.Item>
+            <Form.Item label="Profile Notes" style={{ marginBottom: 0 }}>
+              <Input.TextArea
+                rows={3}
+                value={current.notes || ""}
+                onChange={(e) => updateSetting("notes", e.target.value)}
+              />
+            </Form.Item>
+          </Form>
+        )}
+      </Modal>
+
+      {/* Station edit modal */}
+      <Modal
+        open={Boolean(editStation)}
+        onCancel={() => setEditStation(null)}
+        title={
+          <Space>
+            <EnvironmentOutlined />
+            <span>Edit Station</span>
+          </Space>
+        }
+        okText="Save"
+        onOk={saveStationEdit}
+        width={560}
+        destroyOnClose
+      >
+        {editStation && (
+          <Form layout="vertical" style={{ marginTop: 8 }}>
+            <Form.Item label="Station Name" style={{ marginBottom: 12 }}>
+              <Input
+                value={editStation.name}
+                onChange={(e) => {
+                  updateStationOverride(editStation.station, "name", e.target.value);
+                  setEditStation((s) => ({ ...s, name: e.target.value }));
+                }}
+              />
+            </Form.Item>
+            <Row gutter={12}>
+              <Col span={12}>
+                <Form.Item label="Latitude" style={{ marginBottom: 12 }}>
+                  <Input
+                    inputMode="decimal"
+                    placeholder="e.g. 14.9057"
+                    value={editStation.lat}
+                    onChange={(e) => {
+                      updateStationOverride(editStation.station, "lat", e.target.value);
+                      setEditStation((s) => ({ ...s, lat: e.target.value }));
+                    }}
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item label="Longitude" style={{ marginBottom: 12 }}>
+                  <Input
+                    inputMode="decimal"
+                    placeholder="e.g. 121.0641"
+                    value={editStation.lng}
+                    onChange={(e) => {
+                      updateStationOverride(editStation.station, "lng", e.target.value);
+                      setEditStation((s) => ({ ...s, lng: e.target.value }));
+                    }}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item label="Address" style={{ marginBottom: 12 }}>
+              <Input
+                placeholder="Barangay, Municipality, Province"
+                value={editStation.address}
+                onChange={(e) => {
+                  updateStationOverride(editStation.station, "address", e.target.value);
+                  setEditStation((s) => ({ ...s, address: e.target.value }));
+                }}
+              />
+            </Form.Item>
+            <Form.Item label="Assigned Waterbody" style={{ marginBottom: 0 }}>
+              <Select
+                value={editStation.assignedKey}
+                onChange={(value) => {
+                  updateStationAssignment(editStation.station, value);
+                  setEditStation((s) => ({ ...s, assignedKey: value }));
+                }}
+                options={waterbodies.map((wb) => ({
+                  value: wb.key,
+                  label: wb.name,
+                }))}
+              />
+            </Form.Item>
+          </Form>
+        )}
+      </Modal>
     </div>
   );
 };
 
 const SystemInfo = ({ mode = "all" }) => {
   const [info, setInfo] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
+  const loadInfo = useCallback(() => {
+    setRefreshing(true);
     api
       .get("/admin/system")
       .then((r) => setInfo(r.data))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setRefreshing(false));
   }, []);
 
+  useEffect(() => {
+    queueMicrotask(loadInfo);
+  }, [loadInfo]);
+
   if (!info)
-    return <div className="panel-loading">Loading runtime status...</div>;
+    return (
+      <Card variant="borderless">
+        <div className="panel-loading">Loading runtime status...</div>
+      </Card>
+    );
 
   const uptimeHours = Math.floor(info.uptime / 3600);
   const uptimeMinutes = Math.floor((info.uptime % 3600) / 60);
-  const runtimeRows = [
+  const dbConnected = info.dbStatus === "connected";
+  const memoryPercent = Math.min(100, Math.round((info.memoryMB / 256) * 100));
+
+  const runtimeItems = [
     ["Node.js", info.nodeVersion],
     ["Platform", info.platform],
     ["Hostname", info.hostname],
     ["Environment", info.env],
-    ["Memory Used", `${info.memoryMB} MB`],
-    ["Uptime", `${uptimeHours}h ${uptimeMinutes}m`],
   ];
-  const databaseRows = [
-    ["DB Status", info.dbStatus],
-    ["DB Name", info.dbName || "Not connected"],
-  ];
-  const rows =
-    mode === "runtime"
-      ? runtimeRows
-      : mode === "database"
-        ? databaseRows
-        : [...runtimeRows, ...databaseRows];
+
   const memoryData = [
     { name: "Used", value: info.memoryMB, color: "#446ACB" },
     {
@@ -775,109 +843,175 @@ const SystemInfo = ({ mode = "all" }) => {
     { name: "Start", memory: Math.max(info.memoryMB - 18, 8), uptime: 0 },
     { name: "Now", memory: info.memoryMB, uptime: Math.max(uptimeHours, 1) },
   ];
-  const barData = [
-    { name: "Memory MB", value: info.memoryMB },
-    { name: "Uptime Hrs", value: Math.max(uptimeHours, 1) },
-  ];
 
   return (
-    <div className="runtime-dashboard">
-      <dl className="sinfo-grid">
-        {rows.map(([k, v]) => (
-          <div key={k} className="sinfo-row">
-            <dt>{k}</dt>
-            <dd
-              className={
-                k === "DB Status"
-                  ? v === "connected"
-                    ? "db-ok"
-                    : "db-err"
-                  : ""
+    <Space orientation="vertical" size="large" style={{ width: "100%" }}>
+      <Row gutter={[12, 12]}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card variant="borderless" className="settings-stat-card">
+            <Statistic
+              title="Memory Used"
+              value={info.memoryMB}
+              suffix="MB"
+              prefix={<CloudServerOutlined style={{ color: "#446ACB" }} />}
+            />
+            <Progress
+              percent={memoryPercent}
+              size="small"
+              showInfo={false}
+              strokeColor="#446ACB"
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card variant="borderless" className="settings-stat-card">
+            <Statistic
+              title="Uptime"
+              value={`${uptimeHours}h ${uptimeMinutes}m`}
+              prefix={<ReloadOutlined style={{ color: "#7CB675" }} />}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card variant="borderless" className="settings-stat-card">
+            <Statistic
+              title="Database"
+              value={dbConnected ? "Connected" : "Offline"}
+              valueStyle={{ color: dbConnected ? "#16a34a" : "#dc2626" }}
+              prefix={
+                <Badge status={dbConnected ? "success" : "error"} />
+              }
+            />
+            <span style={{ fontSize: 12, color: "var(--text-muted, #6b7280)" }}>
+              {info.dbName || "Not connected"}
+            </span>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card variant="borderless" className="settings-stat-card">
+            <Statistic
+              title="Environment"
+              value={info.env || "—"}
+              prefix={<DatabaseOutlined style={{ color: "#f59e0b" }} />}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[12, 12]}>
+        <Col xs={24} lg={mode === "database" ? 24 : 10}>
+          <Card
+            variant="borderless"
+            title={
+              <Space>
+                <CloudServerOutlined />
+                <span>Runtime Details</span>
+              </Space>
+            }
+            extra={
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                loading={refreshing}
+                onClick={loadInfo}
+              >
+                Refresh
+              </Button>
+            }
+          >
+            <Descriptions
+              column={1}
+              size="small"
+              items={runtimeItems.map(([label, value]) => ({
+                key: label,
+                label,
+                children: value,
+              }))}
+            />
+          </Card>
+        </Col>
+        {mode !== "database" && (
+          <Col xs={24} lg={14}>
+            <Card
+              variant="borderless"
+              title={
+                <Space>
+                  <LineChartOutlined />
+                  <span>Resource Monitor</span>
+                </Space>
               }
             >
-              {k === "DB Status" && (
-                <span
-                  className={`db-dot ${v === "connected" ? "ok" : "err"}`}
-                />
-              )}
-              {v}
-            </dd>
-          </div>
-        ))}
-      </dl>
-
-      {mode !== "database" && (
-        <div className="runtime-visual-grid">
-          <article>
-            <h4>Resource Share</h4>
-            <ResponsiveContainer width="100%" height={190}>
-              <PieChart>
-                <Pie
-                  data={memoryData}
-                  dataKey="value"
-                  innerRadius={46}
-                  outerRadius={76}
-                  paddingAngle={4}
-                >
-                  {memoryData.map((entry) => (
-                    <Cell key={entry.name} fill={entry.color} />
-                  ))}
-                </Pie>
-                <RechartsTooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </article>
-          <article>
-            <h4>Runtime Monitor</h4>
-            <ResponsiveContainer width="100%" height={190}>
-              <LineChart data={runtimeSeries}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <RechartsTooltip />
-                <Line
-                  type="monotone"
-                  dataKey="memory"
-                  stroke="#446ACB"
-                  strokeWidth={2.4}
-                  dot
-                />
-                <Line
-                  type="monotone"
-                  dataKey="uptime"
-                  stroke="#7CB675"
-                  strokeWidth={2.4}
-                  dot
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </article>
-          <article>
-            <h4>Health Bars</h4>
-            <ResponsiveContainer width="100%" height={190}>
-              <BarChart data={barData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <RechartsTooltip />
-                <Bar dataKey="value" fill="#7CB675" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </article>
-        </div>
-      )}
-    </div>
+              <Row gutter={12}>
+                <Col xs={24} sm={10}>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <PieChart>
+                      <Pie
+                        data={memoryData}
+                        dataKey="value"
+                        innerRadius={46}
+                        outerRadius={72}
+                        paddingAngle={4}
+                      >
+                        {memoryData.map((entry) => (
+                          <Cell key={entry.name} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <RechartsTooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </Col>
+                <Col xs={24} sm={14}>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <LineChart data={runtimeSeries}>
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke="var(--border)"
+                      />
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} />
+                      <RechartsTooltip />
+                      <Line
+                        type="monotone"
+                        dataKey="memory"
+                        stroke="#446ACB"
+                        strokeWidth={2.4}
+                        dot
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="uptime"
+                        stroke="#7CB675"
+                        strokeWidth={2.4}
+                        dot
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </Col>
+              </Row>
+            </Card>
+          </Col>
+        )}
+      </Row>
+    </Space>
   );
+};
+
+const ROLE_TAG_COLORS = { admin: "red", developer: "geekblue", user: "default" };
+const STATUS_TAG_COLORS = {
+  approved: "success",
+  pending: "warning",
+  rejected: "error",
 };
 
 const AccountsPanel = ({ currentUser }) => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [msg, setMsg] = useState("");
+  const [search, setSearch] = useState("");
+  const [accessOpen, setAccessOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [userDraft, setUserDraft] = useState(null);
   const [userAccessDraft, setUserAccessDraft] = useState({});
-  const userPagination = usePaginatedRows(users, 10);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -887,7 +1021,7 @@ const AccountsPanel = ({ currentUser }) => {
         if (mounted) setUsers(r.data);
       })
       .catch(() => {
-        if (mounted) setMsg("Failed to load users.");
+        if (mounted) alertError("Failed to load users.");
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -897,50 +1031,69 @@ const AccountsPanel = ({ currentUser }) => {
     };
   }, []);
 
-  const changeRole = async (id, role) => {
-    try {
-      const { data } = await api.patch(`/admin/users/${id}/role`, { role });
-      setUsers((prev) => prev.map((u) => (u._id === data._id ? data : u)));
-      setMsg(`Role updated to "${role}".`);
-      logActivity("Changed user role", { user: data.email, role }, currentUser);
-    } catch (e) {
-      setMsg(e.response?.data?.message || "Error updating role.");
-    }
-  };
+  const filteredUsers = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return users;
+    return users.filter(
+      (u) =>
+        u.name?.toLowerCase().includes(term) ||
+        u.email?.toLowerCase().includes(term) ||
+        u.role?.toLowerCase().includes(term),
+    );
+  }, [users, search]);
 
-  const changeStatus = async (id, status) => {
+  const pendingUsers = useMemo(
+    () => users.filter((u) => (u.status || "approved") === "pending"),
+    [users],
+  );
+
+  const changeStatus = async (user, status) => {
     try {
-      const { data } = await api.patch(`/admin/users/${id}/status`, { status });
+      const { data } = await api.patch(`/admin/users/${user._id}/status`, {
+        status,
+      });
       setUsers((prev) => prev.map((u) => (u._id === data._id ? data : u)));
-      setMsg(`Account status updated to "${status}".`);
+      toastSaved(
+        status === "approved"
+          ? `${data.name} approved.`
+          : status === "rejected"
+            ? `${data.name} rejected.`
+            : `${data.name} set to ${status}.`,
+      );
       logActivity(
-        "Changed user status",
+        "Reviewed account status",
         { user: data.email, status },
         currentUser,
       );
     } catch (e) {
-      setMsg(e.response?.data?.message || "Error updating account status.");
+      alertError(e.response?.data?.message || "Could not update account status.");
     }
   };
 
-  const deleteUser = async (id, name) => {
-    if (!window.confirm(`Delete user "${name}"? This cannot be undone.`))
-      return;
+  const deleteUser = async (user) => {
+    const confirmed = await confirmAction({
+      title: `Delete "${user.name}"?`,
+      text: "This permanently removes the account and cannot be undone.",
+      icon: "warning",
+      confirmButtonText: "Yes, delete",
+      danger: true,
+    });
+    if (!confirmed) return;
     try {
-      await api.delete(`/admin/users/${id}`);
-      setUsers((prev) => prev.filter((u) => u._id !== id));
+      await api.delete(`/admin/users/${user._id}`);
+      setUsers((prev) => prev.filter((u) => u._id !== user._id));
       const overrides = getUserAccessOverrides();
-      if (overrides[id]) {
-        const { [id]: _removed, ...rest } = overrides;
+      if (overrides[user._id]) {
+        const { [user._id]: _removed, ...rest } = overrides;
         encryptedStorage.setItem(USER_ACCESS_KEY, rest);
         window.dispatchEvent(
           new CustomEvent("wqms:access-settings", { detail: rest }),
         );
       }
-      setMsg(`User "${name}" deleted.`);
-      logActivity("Deleted user account", { user: name }, currentUser);
+      toastSaved(`User "${user.name}" deleted.`);
+      logActivity("Deleted user account", { user: user.name }, currentUser);
     } catch (e) {
-      setMsg(e.response?.data?.message || "Error deleting user.");
+      alertError(e.response?.data?.message || "Error deleting user.");
     }
   };
 
@@ -953,6 +1106,11 @@ const AccountsPanel = ({ currentUser }) => {
       status: user.status || "approved",
     });
     setUserAccessDraft({ ...(getUserAccessOverrides()[user._id] || {}) });
+  };
+
+  const closeUserModal = () => {
+    setEditingUser(null);
+    setUserDraft(null);
   };
 
   const updateUserAccess = (feature, value) => {
@@ -979,435 +1137,458 @@ const AccountsPanel = ({ currentUser }) => {
 
   const saveUserDetails = async () => {
     if (!editingUser || !userDraft) return;
+    setSaving(true);
     try {
       const { data } = await api.patch(
         `/admin/users/${editingUser._id}`,
         userDraft,
       );
       setUsers((prev) => prev.map((u) => (u._id === data._id ? data : u)));
-      setMsg("User details updated.");
       logActivity("Updated user details", { user: data.email }, currentUser);
-      setEditingUser(null);
-      setUserDraft(null);
+      closeUserModal();
+      toastSaved("User account updated.");
     } catch (e) {
-      setMsg(e.response?.data?.message || "Error updating user details.");
+      alertError(e.response?.data?.message || "Error updating user details.");
+    } finally {
+      setSaving(false);
     }
   };
+
+  const columns = [
+    {
+      title: "Account",
+      dataIndex: "name",
+      key: "name",
+      render: (name, record) => (
+        <Space>
+          <Avatar style={{ background: "#446ACB" }} icon={<UserOutlined />}>
+            {name?.charAt(0).toUpperCase()}
+          </Avatar>
+          <span style={{ display: "grid", lineHeight: 1.3 }}>
+            <Space size={6}>
+              <strong style={{ fontWeight: 600 }}>{name}</strong>
+              {record._id === currentUser._id && (
+                <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+                  You
+                </Tag>
+              )}
+            </Space>
+            <small style={{ color: "var(--text-muted, #6b7280)" }}>
+              {record.email}
+            </small>
+          </span>
+        </Space>
+      ),
+    },
+    {
+      title: "Role",
+      dataIndex: "role",
+      key: "role",
+      width: 120,
+      filters: ROLES.map((r) => ({ text: r, value: r })),
+      onFilter: (value, record) => record.role === value,
+      render: (role) => (
+        <Tag color={ROLE_TAG_COLORS[role] || "default"}>{role}</Tag>
+      ),
+    },
+    {
+      title: "Status",
+      dataIndex: "status",
+      key: "status",
+      width: 120,
+      filters: Object.entries(STATUS_LABELS).map(([value, text]) => ({
+        text,
+        value,
+      })),
+      onFilter: (value, record) => (record.status || "approved") === value,
+      render: (status) => (
+        <Tag color={STATUS_TAG_COLORS[status || "approved"]}>
+          {STATUS_LABELS[status || "approved"]}
+        </Tag>
+      ),
+    },
+    {
+      title: "Created",
+      dataIndex: "createdAt",
+      key: "createdAt",
+      width: 130,
+      responsive: ["md"],
+      render: (value) =>
+        new Date(value).toLocaleDateString("en-PH", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        }),
+    },
+    {
+      title: "Actions",
+      key: "actions",
+      width: 230,
+      render: (_, record) => {
+        const isPending = (record.status || "approved") === "pending";
+        return (
+          <Space size={4} wrap>
+            {isPending && record._id !== currentUser._id && (
+              <>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  onClick={() => changeStatus(record, "approved")}
+                >
+                  Approve
+                </Button>
+                <Button
+                  size="small"
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  onClick={() => changeStatus(record, "rejected")}
+                >
+                  Reject
+                </Button>
+              </>
+            )}
+            <Button
+              size="small"
+              icon={<SettingOutlined />}
+              onClick={() => openUserModal(record)}
+            >
+              Manage
+            </Button>
+            {record._id !== currentUser._id && (
+              <Button
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => deleteUser(record)}
+              />
+            )}
+          </Space>
+        );
+      },
+    },
+  ];
 
   if (loading) return <div className="panel-loading">Loading users...</div>;
 
+  const isSelf = editingUser?._id === currentUser._id;
+
   return (
     <div className="accounts-panel">
-      {msg && (
-        <div className="settings-notice" onAnimationEnd={() => setMsg("")}>
-          {msg}
-        </div>
-      )}
-      <ManageAccessSettings currentUser={currentUser} />
-      <div className="users-table-wrap">
-        <table className="users-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th>Created</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {userPagination.rows.map((u, i) => (
-              <tr
-                key={u._id}
-                className={u._id === currentUser._id ? "row-self" : ""}
-              >
-                <td className="td-num">{userPagination.start + i + 1}</td>
-                <td className="td-name">
-                  <span className="u-avatar">
-                    {u.name.charAt(0).toUpperCase()}
-                  </span>
-                  {u.name}
-                  {u._id === currentUser._id && (
-                    <span className="you-badge">You</span>
-                  )}
-                </td>
-                <td className="td-email">{u.email}</td>
-                <td>
-                  <select
-                    className={`role-sel ${u.role}`}
-                    value={u.role}
-                    disabled={u._id === currentUser._id}
-                    onChange={(e) => changeRole(u._id, e.target.value)}
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td>
-                  <select
-                    className={`status-sel ${u.status || "approved"}`}
-                    value={u.status || "approved"}
-                    disabled={u._id === currentUser._id}
-                    onChange={(e) => changeStatus(u._id, e.target.value)}
-                  >
-                    {Object.entries(STATUS_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="td-date">
-                  {new Date(u.createdAt).toLocaleDateString("en-PH", {
-                    year: "numeric",
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </td>
-                <td>
-                  {u._id !== currentUser._id ? (
-                    <div className="user-action-group">
-                      <button
-                        className="mini-action"
-                        onClick={() => openUserModal(u)}
-                      >
-                        Manage
-                      </button>
-                      {u.status !== "approved" && (
-                        <button
-                          className="mini-action ok"
-                          onClick={() => changeStatus(u._id, "approved")}
-                        >
-                          Approve
-                        </button>
-                      )}
-                      {u.status !== "pending" && (
-                        <button
-                          className="mini-action"
-                          onClick={() => changeStatus(u._id, "pending")}
-                        >
-                          Hold
-                        </button>
-                      )}
-                      {u.status !== "rejected" && (
-                        <button
-                          className="mini-action warn"
-                          onClick={() => changeStatus(u._id, "rejected")}
-                        >
-                          Reject
-                        </button>
-                      )}
-                      <button
-                        className="mini-action danger"
-                        onClick={() => deleteUser(u._id, u.name)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      className="mini-action"
-                      onClick={() => openUserModal(u)}
-                    >
-                      Manage
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <TablePagination pagination={userPagination} label="User accounts" />
-      {editingUser && userDraft && (
-        <div
-          className="settings-modal-backdrop"
-          role="presentation"
-          onClick={() => setEditingUser(null)}
+      {pendingUsers.length > 0 && (
+        <Card
+          variant="borderless"
+          className="settings-pending-card"
+          style={{ marginBottom: 16 }}
+          title={
+            <Space>
+              <Badge count={pendingUsers.length} />
+              <TeamOutlined />
+              <span>Pending Sign-Up Approvals</span>
+            </Space>
+          }
         >
-          <section
-            className="settings-user-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Manage user access"
-            onClick={(event) => event.stopPropagation()}
+          <Space orientation="vertical" size={10} style={{ width: "100%" }}>
+            {pendingUsers.map((u) => (
+              <div key={u._id} className="settings-pending-row">
+                <Space>
+                  <Avatar style={{ background: "#f59e0b" }} icon={<UserOutlined />}>
+                    {u.name?.charAt(0).toUpperCase()}
+                  </Avatar>
+                  <span style={{ display: "grid", lineHeight: 1.3 }}>
+                    <strong style={{ fontWeight: 600 }}>{u.name}</strong>
+                    <small style={{ color: "var(--text-muted, #6b7280)" }}>
+                      {u.email}
+                    </small>
+                  </span>
+                </Space>
+                <Space>
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<CheckOutlined />}
+                    onClick={() => changeStatus(u, "approved")}
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    danger
+                    size="small"
+                    icon={<CloseCircleOutlined />}
+                    onClick={() => changeStatus(u, "rejected")}
+                  >
+                    Reject
+                  </Button>
+                </Space>
+              </div>
+            ))}
+          </Space>
+        </Card>
+      )}
+
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 14,
+        }}
+      >
+        <Input.Search
+          allowClear
+          placeholder="Search by name, email, or role"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ maxWidth: 320 }}
+        />
+        <Space wrap>
+          <Tag color="blue">{users.length} accounts</Tag>
+          {pendingUsers.length > 0 && (
+            <Tag color="gold">{pendingUsers.length} pending</Tag>
+          )}
+          <Button
+            icon={<SafetyOutlined />}
+            onClick={() => setAccessOpen(true)}
           >
-            <div className="settings-user-modal-head">
-              <div>
-                <h4>Manage User Access</h4>
-                <p>{editingUser.email}</p>
-              </div>
-              <button type="button" onClick={() => setEditingUser(null)}>
-                x
-              </button>
+            Global Access Settings
+          </Button>
+        </Space>
+      </div>
+
+      <Table
+        rowKey="_id"
+        size="middle"
+        columns={columns}
+        dataSource={filteredUsers}
+        pagination={{ pageSize: 10, showSizeChanger: true }}
+        scroll={{ x: "max-content" }}
+        rowClassName={(record) =>
+          record._id === currentUser._id ? "row-self" : ""
+        }
+      />
+
+      <ManageAccessModal
+        open={accessOpen}
+        onClose={() => setAccessOpen(false)}
+        currentUser={currentUser}
+      />
+
+      <Modal
+        open={Boolean(editingUser && userDraft)}
+        onCancel={closeUserModal}
+        title={
+          <Space>
+            <UserOutlined />
+            <span>Manage User Account</span>
+          </Space>
+        }
+        okText="Save Changes"
+        confirmLoading={saving}
+        onOk={saveUserDetails}
+        width={620}
+        destroyOnClose
+      >
+        {userDraft && (
+          <Form layout="vertical" style={{ marginTop: 8 }}>
+            <Row gutter={12}>
+              <Col xs={24} sm={12}>
+                <Form.Item label="Name" style={{ marginBottom: 12 }}>
+                  <Input
+                    value={userDraft.name}
+                    onChange={(e) =>
+                      setUserDraft((d) => ({ ...d, name: e.target.value }))
+                    }
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12}>
+                <Form.Item label="Email" style={{ marginBottom: 12 }}>
+                  <Input
+                    value={userDraft.email}
+                    onChange={(e) =>
+                      setUserDraft((d) => ({ ...d, email: e.target.value }))
+                    }
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12}>
+                <Form.Item label="Role" style={{ marginBottom: 12 }}>
+                  <Select
+                    value={userDraft.role}
+                    disabled={isSelf}
+                    onChange={(value) =>
+                      setUserDraft((d) => ({ ...d, role: value }))
+                    }
+                    options={ROLES.map((r) => ({ value: r, label: r }))}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12}>
+                <Form.Item label="Status" style={{ marginBottom: 12 }}>
+                  <Select
+                    value={userDraft.status}
+                    disabled={isSelf}
+                    onChange={(value) =>
+                      setUserDraft((d) => ({ ...d, status: value }))
+                    }
+                    options={Object.entries(STATUS_LABELS).map(
+                      ([value, label]) => ({ value, label }),
+                    )}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Divider style={{ margin: "4px 0 14px" }}>
+              <SafetyOutlined /> Role Access Settings
+            </Divider>
+            <p
+              style={{
+                marginTop: 0,
+                fontSize: 12,
+                color: "var(--text-muted, #6b7280)",
+              }}
+            >
+              Toggle access to each app area for this account. Changes apply
+              immediately. A switch on its role default shows a{" "}
+              <Tag style={{ marginInlineEnd: 0 }}>Default</Tag> badge — use{" "}
+              <strong>Reset</strong> to follow the global rule again.
+            </p>
+            <div className="settings-access-toggle-list">
+              {ACCESS_FEATURES.map(([key, label]) => {
+                const override = userAccessDraft[key];
+                const isOverridden = override === "allow" || override === "deny";
+                const checked = isOverridden
+                  ? override === "allow"
+                  : isDefaultFeatureAllowed(key, userDraft.role);
+                return (
+                  <div key={key} className="settings-access-toggle-row">
+                    <div className="settings-access-toggle-label">
+                      <span>{label}</span>
+                      {!isOverridden && (
+                        <Tag bordered={false} color="default">
+                          Default
+                        </Tag>
+                      )}
+                    </div>
+                    <Space size={8}>
+                      {isOverridden && (
+                        <Button
+                          type="link"
+                          size="small"
+                          onClick={() => updateUserAccess(key, "default")}
+                          style={{ paddingInline: 0 }}
+                        >
+                          Reset
+                        </Button>
+                      )}
+                      <Switch
+                        checked={checked}
+                        checkedChildren={<CheckOutlined />}
+                        unCheckedChildren={<CloseCircleOutlined />}
+                        onChange={(value) =>
+                          updateUserAccess(key, value ? "allow" : "deny")
+                        }
+                      />
+                    </Space>
+                  </div>
+                );
+              })}
             </div>
-            <div className="settings-user-form">
-              <label>
-                <span>Name</span>
-                <input
-                  value={userDraft.name}
-                  onChange={(event) =>
-                    setUserDraft((draft) => ({
-                      ...draft,
-                      name: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>Email</span>
-                <input
-                  value={userDraft.email}
-                  onChange={(event) =>
-                    setUserDraft((draft) => ({
-                      ...draft,
-                      email: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>Role</span>
-                <select
-                  value={userDraft.role}
-                  disabled={editingUser._id === currentUser._id}
-                  onChange={(event) =>
-                    setUserDraft((draft) => ({
-                      ...draft,
-                      role: event.target.value,
-                    }))
-                  }
-                >
-                  {ROLES.map((role) => (
-                    <option key={role} value={role}>
-                      {role}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Status</span>
-                <select
-                  value={userDraft.status}
-                  disabled={editingUser._id === currentUser._id}
-                  onChange={(event) =>
-                    setUserDraft((draft) => ({
-                      ...draft,
-                      status: event.target.value,
-                    }))
-                  }
-                >
-                  {Object.entries(STATUS_LABELS).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="settings-user-access">
-              <div className="settings-user-access-head">
-                <h5>Manage Access Settings</h5>
-                <p>
-                  Override role-based access for this account. &quot;Role
-                  default&quot; follows the global minimum-role rule.
-                </p>
-              </div>
-              <div className="settings-user-access-grid">
-                {ACCESS_FEATURES.map(([key, label]) => (
-                  <label key={key}>
-                    <span>{label}</span>
-                    <select
-                      value={userAccessDraft[key] || "default"}
-                      onChange={(event) =>
-                        updateUserAccess(key, event.target.value)
-                      }
-                    >
-                      {ACCESS_OVERRIDE_OPTIONS.map(([value, optionLabel]) => (
-                        <option key={value} value={value}>
-                          {optionLabel}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="settings-user-modal-actions">
-              <button
-                className="settings-btn"
-                type="button"
-                onClick={() => setEditingUser(null)}
-              >
-                Cancel
-              </button>
-              <button
-                className="settings-btn primary"
-                type="button"
-                onClick={saveUserDetails}
-              >
-                Save Changes
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-    </div>
-  );
-};
-
-const ApprovalsPanel = ({ currentUser }) => {
-  const [pendingUsers, setPendingUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [msg, setMsg] = useState("");
-
-  useEffect(() => {
-    let mounted = true;
-    api
-      .get("/admin/users?status=pending")
-      .then(({ data }) => {
-        if (mounted) setPendingUsers(data);
-      })
-      .catch((error) => {
-        if (mounted)
-          setMsg(
-            error.response?.data?.message || "Failed to load pending accounts.",
-          );
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const decide = async (id, status) => {
-    try {
-      await api.patch(`/admin/users/${id}/status`, { status });
-      setPendingUsers((prev) => prev.filter((user) => user._id !== id));
-      setMsg(status === "approved" ? "Account approved." : "Account rejected.");
-      logActivity("Reviewed pending sign-up", { status, id }, currentUser);
-    } catch (error) {
-      setMsg(
-        error.response?.data?.message || "Could not update account status.",
-      );
-    }
-  };
-
-  if (loading)
-    return <div className="panel-loading">Loading pending accounts...</div>;
-
-  return (
-    <div className="approval-panel">
-      {msg && (
-        <div className="settings-notice" onAnimationEnd={() => setMsg("")}>
-          {msg}
-        </div>
-      )}
-      {pendingUsers.length ? (
-        <div className="approval-list">
-          {pendingUsers.map((user) => (
-            <article key={user._id} className="approval-card">
-              <div>
-                <strong>{user.name}</strong>
-                <span>{user.email}</span>
-                <small>
-                  {new Date(user.createdAt).toLocaleDateString("en-PH", {
-                    year: "numeric",
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </small>
-              </div>
-              <div className="approval-actions">
-                <button
-                  className="settings-btn primary"
-                  onClick={() => decide(user._id, "approved")}
-                >
-                  Approve
-                </button>
-                <button
-                  className="settings-btn danger"
-                  onClick={() => decide(user._id, "rejected")}
-                >
-                  Reject
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <div className="approval-state-card">
-          <strong>No pending sign-up accounts</strong>
-          <p>
-            New user registrations will appear here until an administrator or
-            developer approves or rejects them.
-          </p>
-        </div>
-      )}
+          </Form>
+        )}
+      </Modal>
     </div>
   );
 };
 
 const EmailPanel = () => {
   const [testEmail, setTestEmail] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const sendTest = async () => {
     if (!testEmail) return;
     setLoading(true);
-    setStatus("");
+    setStatus(null);
     try {
       await api.post("/auth/forgot-password", { email: testEmail });
-      setStatus("Test email sent if the address exists.");
+      setStatus({ type: "success", text: "Test email sent if the address exists." });
     } catch {
-      setStatus("Failed to send test email. Check Gmail SMTP configuration.");
+      setStatus({
+        type: "error",
+        text: "Failed to send test email. Check Gmail SMTP configuration.",
+      });
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="email-panel">
-      <p className="panel-desc">
-        Emails are sent via Gmail SMTP using the App Password configured in the
-        server environment.
-      </p>
-      <div className="email-row">
-        <label>Configured sender:</label>
-        <code className="env-val">emb.vera.ember@gmail.com</code>
-      </div>
-      <div className="test-email-row">
-        <input
+    <Card
+      variant="borderless"
+      title={
+        <Space>
+          <MailOutlined />
+          <span>Email Configuration</span>
+        </Space>
+      }
+    >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 14 }}
+        title="Emails are sent via Gmail SMTP using the App Password configured in the server environment."
+      />
+      <Descriptions
+        column={1}
+        size="small"
+        style={{ marginBottom: 14 }}
+        items={[
+          {
+            key: "sender",
+            label: "Configured sender",
+            children: <code>emb.vera.ember@gmail.com</code>,
+          },
+        ]}
+      />
+      <Space.Compact style={{ width: "100%", maxWidth: 480 }}>
+        <Input
           type="email"
-          className="settings-input"
           placeholder="Send test reset email to..."
           value={testEmail}
           onChange={(e) => setTestEmail(e.target.value)}
+          prefix={<MailOutlined />}
         />
-        <button
-          className="settings-btn primary"
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
           onClick={sendTest}
-          disabled={loading || !testEmail}
+          loading={loading}
+          disabled={!testEmail}
         >
-          {loading ? "Sending..." : "Send Test"}
-        </button>
-      </div>
-      {status && <p className="email-status">{status}</p>}
-    </div>
+          Send Test
+        </Button>
+      </Space.Compact>
+      {status && (
+        <Alert
+          type={status.type}
+          showIcon
+          style={{ marginTop: 12 }}
+          title={status.text}
+        />
+      )}
+    </Card>
   );
+};
+
+const LOG_ACTION_COLORS = {
+  default: "blue",
 };
 
 const LogsPanel = ({ user }) => {
   const [logs, setLogs] = useState(getAppLogs());
-  const logsPagination = usePaginatedRows(logs, 10);
   const actionData = useMemo(() => {
     const counts = logs.reduce((acc, log) => {
       acc[log.action] = (acc[log.action] || 0) + 1;
@@ -1436,86 +1617,118 @@ const LogsPanel = ({ user }) => {
     URL.revokeObjectURL(url);
   };
 
-  const clearLogs = () => {
+  const clearLogs = async () => {
+    const confirmed = await confirmAction({
+      title: "Clear all app logs?",
+      text: "This permanently removes all locally stored activity logs.",
+      confirmButtonText: "Yes, clear",
+      danger: true,
+    });
+    if (!confirmed) return;
     clearAppLogs();
     logActivity("Cleared app logs", {}, user);
     setLogs(getAppLogs());
+    toastSaved("App logs cleared.");
   };
 
+  const columns = [
+    {
+      title: "Time",
+      dataIndex: "at",
+      key: "at",
+      width: 180,
+      render: (value) => new Date(value).toLocaleString("en-PH"),
+    },
+    {
+      title: "Actor",
+      dataIndex: "actor",
+      key: "actor",
+      width: 200,
+      render: (actor, record) => (
+        <Space size={6}>
+          <span>{actor}</span>
+          <Tag bordered={false}>{record.role}</Tag>
+        </Space>
+      ),
+    },
+    {
+      title: "Action",
+      dataIndex: "action",
+      key: "action",
+      width: 200,
+      render: (action) => (
+        <Tag color={LOG_ACTION_COLORS.default}>{action}</Tag>
+      ),
+    },
+    {
+      title: "Details",
+      dataIndex: "details",
+      key: "details",
+      render: (details) => (
+        <code style={{ fontSize: 11 }}>{JSON.stringify(details || {})}</code>
+      ),
+    },
+  ];
+
   return (
-    <div className="logs-panel">
-      <div className="settings-toolbar">
-        <button
-          className="settings-btn primary"
-          onClick={exportLogs}
-          disabled={!logs.length}
-        >
-          Export Logs
-        </button>
-        <button
-          className="settings-btn danger"
-          onClick={clearLogs}
-          disabled={!logs.length}
-        >
-          Clear Logs
-        </button>
-      </div>
-      <div className="log-visual">
-        <ResponsiveContainer width="100%" height={160}>
-          <BarChart data={actionData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-            <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-            <RechartsTooltip />
-            <Bar dataKey="value" fill="#446ACB" radius={[6, 6, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <div className="users-table-wrap">
-        <table className="users-table logs-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Actor</th>
-              <th>Action</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            {logsPagination.rows.map((log) => (
-              <tr key={log.id}>
-                <td className="td-date">
-                  {new Date(log.at).toLocaleString("en-PH")}
-                </td>
-                <td>
-                  {log.actor}
-                  <span className="log-role">{log.role}</span>
-                </td>
-                <td>
-                  <strong>{log.action}</strong>
-                </td>
-                <td>
-                  <code>{JSON.stringify(log.details || {})}</code>
-                </td>
-              </tr>
-            ))}
-            {!logs.length && (
-              <tr>
-                <td colSpan="4" className="empty-log-cell">
-                  No app activities have been logged yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <TablePagination pagination={logsPagination} label="App logs" />
-    </div>
+    <Space orientation="vertical" size="large" style={{ width: "100%" }}>
+      <Card
+        variant="borderless"
+        title={
+          <Space>
+            <FileTextOutlined />
+            <span>Activity Log</span>
+            <Tag color="blue">{logs.length} records</Tag>
+          </Space>
+        }
+        extra={
+          <Space>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={exportLogs}
+              disabled={!logs.length}
+            >
+              Export
+            </Button>
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              onClick={clearLogs}
+              disabled={!logs.length}
+            >
+              Clear
+            </Button>
+          </Space>
+        }
+      >
+        {actionData.length > 0 && (
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={actionData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+              <RechartsTooltip />
+              <Bar dataKey="value" fill="#446ACB" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+        <Table
+          rowKey="id"
+          size="small"
+          style={{ marginTop: 12 }}
+          columns={columns}
+          dataSource={logs}
+          scroll={{ x: "max-content" }}
+          pagination={{ pageSize: 10, showSizeChanger: true }}
+          locale={{ emptyText: "No app activities have been logged yet." }}
+        />
+      </Card>
+    </Space>
   );
 };
 
 const BackupPanel = ({ user }) => {
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(null);
   const backupRows = [
     {
       name: "Tabular Drafts",
@@ -1539,8 +1752,6 @@ const BackupPanel = ({ user }) => {
       theme: encryptedStorage.getItem("wqm_theme"),
       config: {
         basePath: "/water-quality-monitoring",
-        host: "10.14.77.183",
-        port: 5173,
       },
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -1557,63 +1768,83 @@ const BackupPanel = ({ user }) => {
       { includes: ["drafts", "logs", "theme", "config"] },
       user,
     );
-    setStatus("Backup export generated.");
+    setStatus({ type: "success", text: "Backup export generated." });
+    toastSaved("Backup export generated.");
   };
 
   const importBackup = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
-    const payload = JSON.parse(text);
-    if (payload.localDrafts)
-      encryptedStorage.setItem(WQM_DRAFTS_KEY, payload.localDrafts);
-    if (payload.appLogs)
-      encryptedStorage.setItem("wqms_app_logs", payload.appLogs);
-    if (payload.theme) encryptedStorage.setItem("wqm_theme", payload.theme);
-    logActivity("Imported app backup", { file: file.name }, user);
-    setStatus(
-      "Backup imported. Refresh the app to reload restored local data.",
-    );
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      if (payload.localDrafts)
+        encryptedStorage.setItem(WQM_DRAFTS_KEY, payload.localDrafts);
+      if (payload.appLogs)
+        encryptedStorage.setItem("wqms_app_logs", payload.appLogs);
+      if (payload.theme) encryptedStorage.setItem("wqm_theme", payload.theme);
+      logActivity("Imported app backup", { file: file.name }, user);
+      setStatus({
+        type: "success",
+        text: "Backup imported. Refresh the app to reload restored local data.",
+      });
+      toastSaved("Backup imported.");
+    } catch {
+      setStatus({ type: "error", text: "Invalid backup file." });
+    } finally {
+      event.target.value = "";
+    }
   };
 
   return (
-    <div className="backup-panel">
-      <div className="backup-grid">
+    <Card
+      variant="borderless"
+      title={
+        <Space>
+          <DatabaseOutlined />
+          <span>Local Data Backup</span>
+        </Space>
+      }
+    >
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {backupRows.map((row) => (
-          <article key={row.name} className="backup-card">
-            <span>{row.name}</span>
-            <strong>{row.value}</strong>
-          </article>
+          <Col xs={24} sm={8} key={row.name}>
+            <Card size="small" variant="borderless" className="settings-stat-card">
+              <Statistic title={row.name} value={row.value} />
+            </Card>
+          </Col>
         ))}
-      </div>
-      <div className="settings-toolbar">
-        <button className="settings-btn primary" onClick={exportBackup}>
+      </Row>
+      <Space wrap>
+        <Button
+          type="primary"
+          icon={<DownloadOutlined />}
+          onClick={exportBackup}
+        >
           Export Backup
-        </button>
-        <label className="settings-btn import-btn">
-          Import Backup
-          <input
-            type="file"
-            accept="application/json"
-            onChange={importBackup}
-          />
-        </label>
-      </div>
-      {status && <p className="email-status">{status}</p>}
-    </div>
+        </Button>
+        <Button icon={<UploadOutlined />}>
+          <label style={{ cursor: "pointer" }}>
+            Import Backup
+            <input
+              type="file"
+              accept="application/json"
+              onChange={importBackup}
+              style={{ display: "none" }}
+            />
+          </label>
+        </Button>
+      </Space>
+      {status && (
+        <Alert
+          type={status.type}
+          showIcon
+          style={{ marginTop: 12 }}
+          title={status.text}
+        />
+      )}
+    </Card>
   );
-};
-
-const FORECAST_MONTHS_KEY = "wqms_forecast_months";
-
-export const getForecastMonths = () => {
-  try {
-    const stored = encryptedStorage.getItem(FORECAST_MONTHS_KEY);
-    const n = Number(stored);
-    return Number.isFinite(n) && n >= 1 && n <= 3 ? n : 3;
-  } catch {
-    return 3;
-  }
 };
 
 const AiForecastPanel = () => {
@@ -1624,14 +1855,11 @@ const AiForecastPanel = () => {
   const [engineMessage, setEngineMessage] = useState("");
 
   const saveForecastMonths = (val) => {
-    const clamped = Math.max(1, Math.min(3, Number(val) || 3));
+    const clamped = setForecastMonthsSetting(val);
     setForecastMonths(clamped);
-    encryptedStorage.setItem(FORECAST_MONTHS_KEY, String(clamped));
     setSavedMonths(true);
     setTimeout(() => setSavedMonths(false), 2200);
-    window.dispatchEvent(
-      new CustomEvent("wqms:forecast-months", { detail: clamped }),
-    );
+    toastSaved(`Forecast horizon set to ${clamped} month${clamped > 1 ? "s" : ""}.`);
   };
 
   const checkLocalEngines = useCallback(() => {
@@ -1672,7 +1900,7 @@ const AiForecastPanel = () => {
   ];
 
   return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
+    <Space orientation="vertical" size="large" style={{ width: "100%" }}>
       {/* Forecast Horizon Setting */}
       <Card
         size="small"
@@ -1701,44 +1929,39 @@ const AiForecastPanel = () => {
           project. This applies to all forecast charts — trend charts, AI
           forecast cards, and tabular forecast panels.
         </p>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {horizonOptions.map(({ value, label, desc }) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => saveForecastMonths(value)}
-              style={{
-                flex: "1 1 120px",
-                padding: "10px 14px",
-                borderRadius: 8,
-                border: `2px solid ${forecastMonths === value ? "#446ACB" : "var(--border, #e2e8f0)"}`,
-                background:
-                  forecastMonths === value
-                    ? "rgba(68,106,203,0.08)"
-                    : "transparent",
-                cursor: "pointer",
-                textAlign: "left",
-                transition: "border-color 0.18s, background 0.18s",
-              }}
-            >
-              <strong
+        <Segmented
+          block
+          value={forecastMonths}
+          onChange={saveForecastMonths}
+          options={horizonOptions.map(({ value, label }) => ({
+            value,
+            label,
+          }))}
+        />
+        <Row gutter={[8, 8]} style={{ marginTop: 10 }}>
+          {horizonOptions.map(({ value, desc }) => (
+            <Col xs={24} sm={8} key={value}>
+              <div
                 style={{
-                  display: "block",
-                  fontSize: 13,
-                  color: forecastMonths === value ? "#446ACB" : "inherit",
+                  fontSize: 11,
+                  color:
+                    forecastMonths === value
+                      ? "#446ACB"
+                      : "var(--text-muted, #6b7280)",
+                  fontWeight: forecastMonths === value ? 700 : 400,
+                  textAlign: "center",
                 }}
               >
-                {label}
-              </strong>
-              <span style={{ fontSize: 11, color: "#6b7280" }}>{desc}</span>
-            </button>
+                {desc}
+              </div>
+            </Col>
           ))}
-        </div>
+        </Row>
         <Alert
           type="info"
           showIcon
           style={{ marginTop: 12 }}
-          message={`Currently forecasting ${forecastMonths} month${forecastMonths > 1 ? "s" : ""} ahead. Changes take effect immediately on all forecast charts.`}
+          title={`Currently forecasting ${forecastMonths} month${forecastMonths > 1 ? "s" : ""} ahead. Changes take effect immediately on all forecast charts.`}
         />
       </Card>
 
@@ -1817,7 +2040,7 @@ const AiForecastPanel = () => {
           <Alert
             type="warning"
             showIcon
-            message={engineMessage}
+            title={engineMessage}
             style={{ marginTop: 10 }}
           />
         )}
@@ -1900,21 +2123,14 @@ const Settings = ({ initialSection = "accounts" }) => {
 
       <div className="settings-layout settings-layout-single">
         <div className="settings-content">
-          {active === "accounts" && (
+          {(active === "accounts" || active === "approvals") && (
             <section className="settings-section">
-              <h3>User Accounts</h3>
+              <h3>Account Management</h3>
               <p className="section-desc">
-                Manage roles, approval states, and account-level actions.
+                Manage roles, approval states, access toggles, and
+                account-level actions in one place.
               </p>
               <AccountsPanel currentUser={user} />
-            </section>
-          )}
-
-          {active === "approvals" && (
-            <section className="settings-section">
-              <h3>Sign Up Account Approval</h3>
-              <p className="section-desc">Review pending sign-up requests.</p>
-              <ApprovalsPanel currentUser={user} />
             </section>
           )}
 
@@ -1950,27 +2166,57 @@ const Settings = ({ initialSection = "accounts" }) => {
             </section>
           )}
 
-          {active === "visualization-data" && (
+          {(active === "backup" ||
+            active === "email" ||
+            active === "visualization-data") && (
             <section className="settings-section">
-              <h3>Published WQM Dataset</h3>
+              <h3>Backup, Published Data &amp; Email</h3>
               <p className="section-desc">
-                Choose which WQM year dashboard, visual analytics, and
-                monitoring should display.
+                Manage the published WQM dataset, export or restore local data,
+                and test the Gmail SMTP integration.
               </p>
-              <VisualizationYearSettings currentUser={user} />
-            </section>
-          )}
-
-          {(active === "backup" || active === "email") && (
-            <section className="settings-section">
-              <h3>Backup, Config &amp; Email</h3>
-              <p className="section-desc">
-                Export or restore local data, and test the Gmail SMTP integration.
-              </p>
+              <div
+                style={{
+                  marginBottom: "1.5rem",
+                  borderBottom: "1px solid var(--border)",
+                  paddingBottom: "1.25rem",
+                }}
+              >
+                <h4
+                  style={{
+                    margin: "0 0 0.4rem",
+                    fontSize: "0.92rem",
+                    fontWeight: 700,
+                  }}
+                >
+                  Published WQM Dataset
+                </h4>
+                <p className="section-desc" style={{ margin: "0 0 0.75rem" }}>
+                  Choose which WQM year dashboard, visual analytics, and
+                  monitoring should display.
+                </p>
+                <VisualizationYearSettings currentUser={user} />
+              </div>
               <BackupPanel user={user} />
-              <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
-                <h4 style={{ margin: '0 0 0.4rem', fontSize: '0.92rem', fontWeight: 700 }}>Email Configuration</h4>
-                <p className="section-desc" style={{ margin: '0 0 0.75rem' }}>Test the Gmail SMTP integration.</p>
+              <div
+                style={{
+                  marginTop: "1.5rem",
+                  borderTop: "1px solid var(--border)",
+                  paddingTop: "1.25rem",
+                }}
+              >
+                <h4
+                  style={{
+                    margin: "0 0 0.4rem",
+                    fontSize: "0.92rem",
+                    fontWeight: 700,
+                  }}
+                >
+                  Email Configuration
+                </h4>
+                <p className="section-desc" style={{ margin: "0 0 0.75rem" }}>
+                  Test the Gmail SMTP integration.
+                </p>
                 <EmailPanel />
               </div>
             </section>
