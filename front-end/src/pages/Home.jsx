@@ -30,6 +30,10 @@ import WaterbodyProfile from "./WaterbodyProfile";
 import { logActivity } from "../utils/appLog";
 import encryptedStorage from "../utils/encryptedStorage";
 import {
+  useLineChartMergeSettings,
+  buildMultiYearTrend,
+} from "../utils/lineChartSettings";
+import {
   IcoDashboard,
   IcoTable,
   IcoWater,
@@ -63,6 +67,7 @@ import {
   getParamData,
   getParamStatus,
   getParamUnit,
+  hasNumericReading,
 } from "../utils/wqmData";
 import {
   buildWaterbodyOptions,
@@ -71,6 +76,7 @@ import {
   useTabularYears,
   useWqmSheets,
   usePublishedWqmDataset,
+  useAllYearSheets,
 } from "../utils/wqmSheets";
 import { loadStationLocationsCached } from "../utils/stationWorkbook";
 import { resolveWaterbodyMapLocations } from "../utils/stationGeo";
@@ -218,35 +224,74 @@ const getCorrelationColor = (value) => {
 };
 
 const getCorrelationInterpretation = (matrix) => {
-  const pairs = matrix.flatMap((row) =>
-    row.cells
-      .filter((cell) => cell.rowParam !== cell.colParam && cell.value !== null)
-      .map((cell) => cell),
+  const cells = matrix.flatMap((row) =>
+    row.cells.filter(
+      (cell) => cell.rowParam !== cell.colParam && cell.value !== null,
+    ),
   );
 
-  if (!pairs.length)
-    return "Not enough paired station values are available to calculate relationships for this waterbody.";
+  if (!cells.length) {
+    return {
+      summary:
+        "Not enough paired station values are available to calculate relationships for this waterbody.",
+      points: [],
+    };
+  }
 
-  const strongestPositive = pairs
+  // Drop mirrored duplicates (A vs B and B vs A are the same relationship).
+  const seen = new Set();
+  const unique = cells.filter((cell) => {
+    const key = [cell.rowParam, cell.colParam].sort().join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const describeStrength = (abs) => {
+    if (abs >= 0.8) return "very strong";
+    if (abs >= 0.6) return "strong";
+    if (abs >= 0.4) return "moderate";
+    if (abs >= 0.2) return "weak";
+    return "very weak";
+  };
+
+  const strongestPositive = unique
     .filter((cell) => cell.value > 0)
     .sort((a, b) => b.value - a.value)[0];
-  const strongestNegative = pairs
+  const strongestNegative = unique
     .filter((cell) => cell.value < 0)
     .sort((a, b) => a.value - b.value)[0];
+  const strongCount = unique.filter((cell) => Math.abs(cell.value) >= 0.6).length;
 
-  const parts = [];
+  const points = [];
   if (strongestPositive) {
-    parts.push(
-      `${strongestPositive.rowParam} and ${strongestPositive.colParam} move together most strongly (r=${strongestPositive.value.toFixed(2)}).`,
+    points.push(
+      `${strongestPositive.rowParam} and ${strongestPositive.colParam} have the closest "rise and fall together" relationship — a ${describeStrength(Math.abs(strongestPositive.value))} positive link (r = ${strongestPositive.value.toFixed(2)}). When one reading goes up, the other usually goes up as well.`,
     );
   }
   if (strongestNegative) {
-    parts.push(
-      `${strongestNegative.rowParam} and ${strongestNegative.colParam} show the strongest inverse movement (r=${strongestNegative.value.toFixed(2)}).`,
+    points.push(
+      `${strongestNegative.rowParam} and ${strongestNegative.colParam} move in opposite directions the most — a ${describeStrength(Math.abs(strongestNegative.value))} inverse link (r = ${strongestNegative.value.toFixed(2)}). As one rises, the other tends to drop.`,
     );
   }
+  if (strongCount) {
+    points.push(
+      `${strongCount} parameter pair${strongCount === 1 ? "" : "s"} show a strong connection (0.6 or higher). These are the relationships most worth watching, since they may point to a shared source or condition affecting both readings.`,
+    );
+  } else {
+    points.push(
+      "No pair stands out as strongly connected right now, which suggests these parameters are changing fairly independently of one another.",
+    );
+  }
+  points.push(
+    "A strong link does not prove that one parameter causes the other — it only means they tend to change at the same time, so treat it as a clue rather than a conclusion.",
+  );
 
-  return parts.join(" ");
+  return {
+    summary:
+      "This grid measures how strongly each pair of parameters moves together, on a scale from -1 (perfect opposites) to +1 (perfect match). Blue cells mean the two readings rise and fall together, orange cells mean one rises while the other falls, and pale cells mean little or no connection.",
+    points,
+  };
 };
 
 const getObservationMeta = (value) => {
@@ -340,14 +385,27 @@ const TrendValueLabel = ({
 /* ── Dashboard overview ── */
 const DashboardView = () => {
   const { year, sheets, loading, error } = usePublishedWqmDataset();
-  const WATERBODIES = useMemo(() => buildWaterbodyOptions(sheets), [sheets]);
+  // Only surface waterbodies that actually have readings for the published
+  // (latest) year. Empty waterbodies are hidden until a reading is added, at
+  // which point they reappear automatically (this memo recomputes on update).
+  const WATERBODIES = useMemo(() => {
+    const options = buildWaterbodyOptions(sheets);
+    return options.filter((waterbody) => {
+      const sheet = sheets.find((item) => item.key === waterbody.key);
+      const stations = getReadableStations(sheet);
+      return stations.some((station) => hasNumericReading(station));
+    });
+  }, [sheets]);
   const groupedWaterbodies = useMemo(
     () => groupWaterbodyByProvince(WATERBODIES),
     [WATERBODIES],
   );
-  const [selectedWaterbody, setSelectedWaterbody] = useState(
-    WATERBODIES[0]?.key || "",
-  );
+  // The dropdown lists waterbodies grouped/sorted by province, so the first
+  // item the user sees is the first grouped entry (e.g. Aurora · Baler Bay),
+  // not WATERBODIES[0]. Default the selection to that visible first item.
+  const defaultWaterbodyKey =
+    groupedWaterbodies[0]?.items?.[0]?.key || WATERBODIES[0]?.key || "";
+  const [selectedWaterbody, setSelectedWaterbody] = useState("");
   const [chartParam, setChartParam] = useState(CHART_PARAMS[0]);
   const [paramSlideshow, setParamSlideshow] = useState(false);
   const [selectedObservationMonth, setSelectedObservationMonth] = useState("");
@@ -361,7 +419,7 @@ const DashboardView = () => {
     (waterbody) => waterbody.key === selectedWaterbody,
   )
     ? selectedWaterbody
-    : WATERBODIES[0]?.key || "";
+    : defaultWaterbodyKey;
 
   const sheet = sheets.find((item) => item.key === activeWaterbodyKey);
   const selectedInfo =
@@ -383,7 +441,22 @@ const DashboardView = () => {
     ? chartParam
     : chartParams[0] || "";
   const activeUnit = getParamUnit(activeParam);
-  const stationSeries = useMemo(
+
+  // Multi-year historical trend setting
+  const { includeHistoricalYears, historicalYears } = useLineChartMergeSettings();
+  // All years to display: historicalYears (ascending) + published year at end
+  const allTrendYears = useMemo(() => {
+    if (!includeHistoricalYears || !historicalYears.length) return [];
+    const sorted = [...historicalYears].sort((a, b) => a - b);
+    // Ensure published year is at the end (don't duplicate it)
+    return sorted.includes(year) ? sorted : [...sorted, year];
+  }, [includeHistoricalYears, historicalYears, year]);
+
+  const isMultiYear = allTrendYears.length > 0;
+
+  const { map: allYearSheetsMap } = useAllYearSheets(isMultiYear ? allTrendYears : []);
+
+  const rawStationSeries = useMemo(
     () =>
       stations.map((station, index) => ({
         station,
@@ -392,11 +465,31 @@ const DashboardView = () => {
       })),
     [stations],
   );
-  const trendData = useMemo(
+  // Multi-year mode always uses a single merged line; per-station mode is kept
+  // for the single-year view.
+  const stationSeries = useMemo(
     () =>
-      activeParam ? buildStationTrendData(stationSeries, activeParam) : [],
-    [activeParam, stationSeries],
+      isMultiYear
+        ? [{ station: { stnId: "Historical trend (all stations)" }, chartKey: "merged", color: CHART_COLORS[0] }]
+        : rawStationSeries,
+    [isMultiYear, rawStationSeries],
   );
+  const trendData = useMemo(() => {
+    if (!activeParam) return [];
+    if (isMultiYear) {
+      return buildMultiYearTrend(
+        allYearSheetsMap,
+        allTrendYears,
+        activeWaterbodyKey,
+        activeParam,
+        MONTHS_SHORT,
+        getParamData,
+        getMonthlyNumber,
+        getReadableStations,
+      );
+    }
+    return buildStationTrendData(rawStationSeries, activeParam);
+  }, [activeParam, isMultiYear, allYearSheetsMap, allTrendYears, activeWaterbodyKey, rawStationSeries]);
 
   // Parameter slideshow: auto-advance the trend chart parameter while playing.
   const slideshowActive = paramSlideshow && chartParams.length >= 4;
@@ -994,7 +1087,14 @@ const DashboardView = () => {
           </div>
           <div className="corr-interpretation">
             <strong>Interpretation</strong>
-            <p>{correlationInterpretation}</p>
+            <p>{correlationInterpretation.summary}</p>
+            {correlationInterpretation.points.length > 0 && (
+              <ul className="corr-interpretation-points">
+                {correlationInterpretation.points.map((point, index) => (
+                  <li key={index}>{point}</li>
+                ))}
+              </ul>
+            )}
           </div>
         </article>
 
@@ -1066,6 +1166,7 @@ const DEFAULT_ACCESS_SETTINGS = {
   waterbodies: "user",
   tabular: "user",
   developerManager: "developer",
+  settings: "developer",
 };
 
 const getStoredAccessSettings = () => {
@@ -1120,12 +1221,15 @@ const Home = () => {
 
   const [activeView, setActiveView] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [tabularOpen, setTabularOpen] = useState(false);
   const [newYearOpen, setNewYearOpen] = useState(false);
   const [waterbodiesOpen, setWaterbodiesOpen] = useState(false);
   const [visualizationsOpen, setVisualizationsOpen] = useState(false);
   const [developerOpen, setDeveloperOpen] = useState(false);
   const [developerSection, setDeveloperSection] = useState("accounts");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState("waterbody-settings");
   const [activeVisualization, setActiveVisualization] = useState("heatmap");
   const [activeWaterbody, setActiveWaterbody] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -1180,6 +1284,7 @@ const Home = () => {
     if (view.startsWith("tabular")) return "tabular";
     if (view === "waterbody") return "waterbodies";
     if (view === "developer-manager") return "developerManager";
+    if (view === "settings") return "settings";
     if (view === "visualization") {
       return activeVisualization === "map-3d" ? "waterbodies" : "visualizations";
     }
@@ -1221,6 +1326,12 @@ const Home = () => {
     logActivity("Opened developer manager section", { section }, user);
   };
 
+  const navSettings = (section) => {
+    setSettingsSection(section);
+    setActiveView("settings");
+    logActivity("Opened settings section", { section }, user);
+  };
+
   const navVisualization = (section) => {
     setActiveVisualization(section);
     setActiveView("visualization");
@@ -1237,6 +1348,7 @@ const Home = () => {
     {
       dashboard: "Dashboard",
       "developer-manager": "Developer Manager",
+      settings: "Settings",
       visualization:
         activeVisualization === "map-3d"
           ? "3D Waterbody Map"
@@ -1251,7 +1363,7 @@ const Home = () => {
   const hideTopbar = activeView.startsWith("tabular");
 
   return (
-    <div className="dashboard">
+    <div className={`dashboard${sidebarCollapsed ? " is-collapsed" : ""}`}>
       {/* ── Mobile sidebar backdrop ── */}
       {sidebarOpen && (
         <div
@@ -1261,7 +1373,7 @@ const Home = () => {
       )}
       {/* ── Sidebar ── */}
       <aside
-        className={`sidebar${sidebarOpen ? " sidebar-mobile-open" : ""}`}
+        className={`sidebar${sidebarOpen ? " sidebar-mobile-open" : ""}${sidebarCollapsed ? " collapsed" : ""}`}
         onClick={(e) => {
           if (
             window.innerWidth <= 480 &&
@@ -1271,6 +1383,15 @@ const Home = () => {
             setSidebarOpen(false);
         }}
       >
+        <button
+          type="button"
+          className="sidebar-collapse-toggle"
+          onClick={() => setSidebarCollapsed((v) => !v)}
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          <IcoChevronRight size={15} />
+        </button>
         <div className="sidebar-brand">
           <div className="sidebar-logos">
             <img
@@ -1286,6 +1407,9 @@ const Home = () => {
               Environmental Management Bureau
             </span>
             <span className="sidebar-brand-sub">Region III</span>
+            <span className="sidebar-brand-system">
+              Water Quality Monitoring System
+            </span>
           </div>
         </div>
 
@@ -1448,15 +1572,53 @@ const Home = () => {
                     {[
                       ["accounts", "Account Management"],
                       ["runtime", "Runtime & Database"],
-                      ["waterbody-settings", "Waterbody Profiles"],
+                      ["chart-config", "Chart Configuration"],
                       ["logs", "App Logs"],
                       ["backup", "Backup, Data & Email"],
-                      ["ai", "AI Forecast"],
                     ].map(([section, label]) => (
                       <button
                         key={section}
                         className={`nav-item nav-sub-item${activeView === "developer-manager" && developerSection === section ? " active" : ""}`}
                         onClick={() => navDeveloper(section)}
+                      >
+                        <span className="nav-wb-dot" />
+                        <span className="nav-label">{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+          {["admin", "developer"].includes(user?.role) &&
+            canAccess("settings") && (
+              <>
+                <p className="nav-section-label">Settings</p>
+                <button
+                  className={`nav-item nav-group-toggle${settingsOpen || activeView === "settings" ? " open" : ""}`}
+                  onClick={() => setSettingsOpen((open) => !open)}
+                >
+                  <IcoSettings size={15} />
+                  <span className="nav-label">Settings</span>
+                  <span className="nav-chevron-icon">
+                    {settingsOpen ? (
+                      <IcoChevronDown size={12} />
+                    ) : (
+                      <IcoChevronRight size={12} />
+                    )}
+                  </span>
+                </button>
+                {settingsOpen && (
+                  <div className="nav-sub-group">
+                    {[
+                      ["waterbody-settings", "Waterbody Profiles & Station Locations"],
+                      ["linechart", "Line Chart Data"],
+                      ["ai", "AI Forecast"],
+                    ].map(([section, label]) => (
+                      <button
+                        key={section}
+                        className={`nav-item nav-sub-item${activeView === "settings" && settingsSection === section ? " active" : ""}`}
+                        onClick={() => navSettings(section)}
                       >
                         <span className="nav-wb-dot" />
                         <span className="nav-label">{label}</span>
@@ -1593,6 +1755,12 @@ const Home = () => {
                 <Settings
                   key={developerSection}
                   initialSection={developerSection}
+                />
+              )}
+              {activeView === "settings" && (
+                <Settings
+                  key={settingsSection}
+                  initialSection={settingsSection}
                 />
               )}
               {activeView === "waterbody" && activeWaterbody && (

@@ -65,6 +65,7 @@ import { loadStationLocationsCached } from "../utils/stationWorkbook";
 import {
   buildWaterbodyOptions,
   getAllStations,
+  getReadableStations,
   getStoredWqmSheets,
   groupWaterbodyByProvince,
   publishWqmYear,
@@ -73,13 +74,28 @@ import {
   WQM_PUBLISHED_YEAR_KEY,
   WQM_YEAR_OPTIONS,
   useWqmSheets,
+  useAllYearSheets,
+  getYearSheetsLocal,
+  saveYearSheetsLocal,
 } from "../utils/wqmSheets";
+import {
+  MONTHS_SHORT,
+  getAvailableParams,
+  getMonthlyNumber,
+  getParamData,
+} from "../utils/wqmData";
+import {
+  getLineChartMergeSettings,
+  setLineChartMergeSettings,
+  buildMultiYearTrend,
+} from "../utils/lineChartSettings";
 import { clearAppLogs, getAppLogs, logActivity } from "../utils/appLog";
 import {
   getForecastMonths,
   setForecastMonths as setForecastMonthsSetting,
 } from "../utils/forecastSettings";
 import { confirmAction, toastSaved, alertError } from "../utils/swal";
+import ChartConfiguration from "./ChartConfiguration";
 import "./Settings.css";
 
 const ROLES = ["user", "developer", "admin"];
@@ -100,6 +116,7 @@ const ACCESS_FEATURES = [
   ["tabular", "Tabular Results", "user"],
   ["tabularCrud", "Tabular CRUD", "admin"],
   ["developerManager", "Developer Manager", "developer"],
+  ["settings", "Settings", "developer"],
 ];
 
 const getStationAssignmentKey = (waterbodyKey, station) =>
@@ -351,8 +368,24 @@ const VisualizationYearSettings = ({ currentUser }) => {
   );
 };
 
+const PAST_YEARS = WQM_YEAR_OPTIONS.filter((y) => y !== 2026).sort((a, b) => b - a); // [2025, 2024]
+const ALL_EDITABLE_YEARS = [2026, ...PAST_YEARS]; // newest first
+
 const WaterbodyProfileSettings = ({ currentUser }) => {
-  const sheets = useWqmSheets();
+  // ── Year selector ──────────────────────────────────────────────────────
+  const [activeYear, setActiveYear] = useState(2026);
+
+  // 2026: live local sheets. Past years: loaded via useAllYearSheets.
+  const liveSheets = useWqmSheets();
+  const { map: histMap, loading: histLoading } = useAllYearSheets(
+    activeYear !== 2026 ? [activeYear] : [],
+  );
+
+  const sheets = activeYear === 2026
+    ? liveSheets
+    : (histMap.get(activeYear) || []);
+
+  // ── Main panel state ───────────────────────────────────────────────────
   const waterbodies = useMemo(() => buildWaterbodyOptions(sheets), [sheets]);
   const [stationLocations, setStationLocations] = useState([]);
   const [settings, setSettings] = useState(() => {
@@ -364,9 +397,22 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
   });
   const [editStation, setEditStation] = useState(null);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  // Local drafts for the past-year profile modal so the inputs stay responsive
+  // regardless of how quickly the cached sheets refresh.
+  const [profileNameDraft, setProfileNameDraft] = useState("");
+  const [profileClassDraft, setProfileClassDraft] = useState("");
+
   const provinceGroups = useMemo(() => groupWaterbodyByProvince(waterbodies), [waterbodies]);
   const activeKey = waterbodies[0]?.key || "";
   const [selectedKey, setSelectedKey] = useState(activeKey);
+
+  // Re-select first waterbody when the year changes.
+  useEffect(() => {
+    setSelectedKey(waterbodies[0]?.key || "");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeYear]);
+
   const selectedWaterbody =
     waterbodies.find((item) => item.key === selectedKey) || waterbodies[0];
   const selectedSheet = sheets.find(
@@ -406,9 +452,18 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     }
   }, [activeKey, selectedKey]);
 
+  // Seed the profile modal drafts whenever it opens (or the waterbody changes).
+  useEffect(() => {
+    if (profileOpen && selectedSheet) {
+      setProfileNameDraft(selectedSheet.name || selectedWaterbody?.name || "");
+      setProfileClassDraft(selectedSheet.classInfo || "");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileOpen, selectedWaterbody?.key, activeYear]);
+
+  // ── Profile-level setting update (2026 only) ───────────────────────────
   const updateSetting = (field, value) => {
     if (!selectedWaterbody) return;
-    // Always read from encryptedStorage to avoid stale React-state closure overwriting previous changes
     const latestSettings = encryptedStorage.getItem("wqms_waterbody_profile_settings") || {};
     const latestCurrent = latestSettings[selectedWaterbody.key] || {};
     const next = {
@@ -425,46 +480,162 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     );
     logActivity(
       "Updated waterbody profile settings",
-      { waterbody: selectedWaterbody.name, field },
+      { waterbody: selectedWaterbody.name, field, year: activeYear },
       currentUser,
     );
   };
 
+  // ── Station-level edits persisted directly to year sheets ─────────────
+  const updateStationField = useCallback((stationNo, field, value) => {
+    const current = activeYear === 2026
+      ? getStoredWqmSheets()
+      : (getYearSheetsLocal(activeYear) || sheets);
+    const next = current.map((sheet) =>
+      sheet.key !== selectedWaterbody?.key ? sheet : {
+        ...sheet,
+        stations: sheet.stations.map((stn) =>
+          String(stn.stnNo) !== String(stationNo) ? stn : { ...stn, [field]: value },
+        ),
+      },
+    );
+    saveYearSheetsLocal(activeYear, next);
+    logActivity(
+      `Edited station ${field} in WQM ${activeYear}`,
+      { waterbody: selectedWaterbody?.name, stationNo, field },
+      currentUser,
+    );
+  }, [activeYear, selectedWaterbody, sheets, currentUser]);
+
+  // ── Waterbody classInfo edit ───────────────────────────────────────────
+  const updateWaterbodyClassInfo = useCallback((classInfo) => {
+    const current = activeYear === 2026
+      ? getStoredWqmSheets()
+      : (getYearSheetsLocal(activeYear) || sheets);
+    const next = current.map((sheet) =>
+      sheet.key !== selectedWaterbody?.key ? sheet : { ...sheet, classInfo },
+    );
+    saveYearSheetsLocal(activeYear, next);
+    logActivity(
+      `Updated waterbody classInfo in WQM ${activeYear}`,
+      { waterbody: selectedWaterbody?.name, classInfo },
+      currentUser,
+    );
+  }, [activeYear, selectedWaterbody, sheets, currentUser]);
+
+  // ── Waterbody name edit (writes the raw sheet name; persisted on push) ──
+  const updateWaterbodyName = useCallback((name) => {
+    const current = activeYear === 2026
+      ? getStoredWqmSheets()
+      : (getYearSheetsLocal(activeYear) || sheets);
+    const next = current.map((sheet) =>
+      sheet.key !== selectedWaterbody?.key ? sheet : { ...sheet, name },
+    );
+    saveYearSheetsLocal(activeYear, next);
+    logActivity(
+      `Updated waterbody name in WQM ${activeYear}`,
+      { waterbody: selectedWaterbody?.key, name },
+      currentUser,
+    );
+  }, [activeYear, selectedWaterbody, sheets, currentUser]);
+
+  // ── For past years: push edits to MongoDB ─────────────────────────────
+  const pushYearToServer = async () => {
+    if (activeYear === 2026 || syncing) return;
+    const local = getYearSheetsLocal(activeYear);
+    if (!local || !local.length) {
+      alertError(`No local data for ${activeYear} to push.`);
+      return;
+    }
+    const confirmed = await confirmAction({
+      title: `Push ${activeYear} edits to MongoDB?`,
+      text: `This overwrites the server's WQM ${activeYear} dataset with your locally-edited copy. Chart Configuration and historical charts will reflect the updates.`,
+      confirmButtonText: `Yes, push ${activeYear}`,
+    });
+    if (!confirmed) return;
+    setSyncing(true);
+    try {
+      await api.put(`/water/wqm/${activeYear}`, { sheets: local });
+      toastSaved(`WQM ${activeYear} pushed to the server. Chart Configuration will now use the updated data.`);
+      logActivity(`Pushed WQM ${activeYear} edits to server`, {}, currentUser);
+    } catch (err) {
+      alertError(err?.response?.data?.message || `Failed to push WQM ${activeYear}.`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // ── Re-fetch past year from server (discard local edits) ──────────────
+  const refetchFromServer = async () => {
+    if (activeYear === 2026) return;
+    const confirmed = await confirmAction({
+      title: `Re-fetch WQM ${activeYear} from server?`,
+      text: `This discards any local edits you made to the ${activeYear} dataset and replaces them with the server copy.`,
+      confirmButtonText: 'Yes, re-fetch',
+      danger: true,
+    });
+    if (!confirmed) return;
+    setSyncing(true);
+    try {
+      const res = await api.get(`/water/wqm/${activeYear}`);
+      const fresh = res.data?.sheets || [];
+      if (!fresh.length) throw new Error('Empty response from server.');
+      encryptedStorage.setItem(`wqm_${activeYear}_drafts`, fresh);
+      window.dispatchEvent(new CustomEvent('wqm:drafts-updated'));
+      toastSaved(`WQM ${activeYear} refreshed from server.`);
+      logActivity(`Re-fetched WQM ${activeYear} from server`, {}, currentUser);
+    } catch (err) {
+      alertError(err?.response?.data?.message || `Failed to fetch WQM ${activeYear}.`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // ── Delete waterbody (any year). Past-year deletions are persisted to
+  //    MongoDB when the dev pushes the year to the server. ────────────────
   const deleteWaterbody = async () => {
     if (!selectedWaterbody) return;
+    const past = activeYear !== 2026;
     const confirmed = await confirmAction({
-      title: `Delete "${selectedWaterbody.name}"?`,
-      text: "This removes the waterbody from the local dataset. This cannot be undone without a page reload.",
+      title: `Delete "${selectedWaterbody.name}"${past ? ` from WQM ${activeYear}` : ""}?`,
+      text: past
+        ? `This removes the waterbody from the local ${activeYear} copy. Use "Push edits to server" afterwards to permanently delete it from MongoDB.`
+        : "This removes the waterbody from the local dataset. This cannot be undone without a page reload.",
       confirmButtonText: "Yes, delete",
       danger: true,
     });
     if (!confirmed) return;
-    const currentSheets = getStoredWqmSheets();
+
+    const currentSheets = activeYear === 2026
+      ? getStoredWqmSheets()
+      : (getYearSheetsLocal(activeYear) || sheets);
     const filtered = currentSheets.filter((s) => s.key !== selectedWaterbody.key);
-    saveStoredWqmSheets(filtered);
-    const nextSettings = { ...settings };
-    delete nextSettings[selectedWaterbody.key];
-    setSettings(nextSettings);
-    encryptedStorage.setItem("wqms_waterbody_profile_settings", nextSettings);
-    window.dispatchEvent(
-      new CustomEvent("wqms:waterbody-profile-settings", { detail: nextSettings }),
-    );
+    saveYearSheetsLocal(activeYear, filtered);
+
+    if (!past) {
+      const nextSettings = { ...settings };
+      delete nextSettings[selectedWaterbody.key];
+      setSettings(nextSettings);
+      encryptedStorage.setItem("wqms_waterbody_profile_settings", nextSettings);
+      window.dispatchEvent(
+        new CustomEvent("wqms:waterbody-profile-settings", { detail: nextSettings }),
+      );
+    }
+
     const remaining = waterbodies.filter((w) => w.key !== selectedWaterbody.key);
     setSelectedKey(remaining[0]?.key || "");
     logActivity(
-      "Deleted waterbody from local dataset",
-      { waterbody: selectedWaterbody.name },
+      `Deleted waterbody from WQM ${activeYear}`,
+      { waterbody: selectedWaterbody.name, year: activeYear },
       currentUser,
     );
-    toastSaved(`"${selectedWaterbody.name}" removed from the local dataset.`);
+    toastSaved(
+      `"${selectedWaterbody.name}" removed from WQM ${activeYear}.${past ? " Push edits to server to save the deletion." : ""}`,
+    );
   };
 
   const updateStationAssignment = (station, targetWaterbodyKey) => {
     if (!selectedWaterbody) return;
-    const assignmentKey = getStationAssignmentKey(
-      selectedWaterbody.key,
-      station,
-    );
+    const assignmentKey = getStationAssignmentKey(selectedWaterbody.key, station);
     const nextAssignments = { ...stationAssignments };
     if (!targetWaterbodyKey || targetWaterbodyKey === selectedWaterbody.key) {
       delete nextAssignments[assignmentKey];
@@ -476,10 +647,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
 
   const updateStationOverride = (station, field, value) => {
     if (!selectedWaterbody) return;
-    const assignmentKey = getStationAssignmentKey(
-      selectedWaterbody.key,
-      station,
-    );
+    const assignmentKey = getStationAssignmentKey(selectedWaterbody.key, station);
     const nextOverrides = {
       ...stationOverrides,
       [assignmentKey]: {
@@ -493,24 +661,12 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
   const stationRows = useMemo(
     () =>
       selectedStations.map((station) => {
-        const assignmentKey = getStationAssignmentKey(
-          selectedWaterbody?.key,
-          station,
-        );
-        const assignedKey =
-          stationAssignments[assignmentKey] || selectedWaterbody?.key;
+        const assignmentKey = getStationAssignmentKey(selectedWaterbody?.key, station);
+        const assignedKey = stationAssignments[assignmentKey] || selectedWaterbody?.key;
         const override = stationOverrides[assignmentKey] || {};
-        const location = matchStationLocation(
-          station,
-          selectedWaterbody,
-          stationLocations,
-        );
-        const lat =
-          override.lat ??
-          (Number.isFinite(location?.lat) ? String(location.lat) : "");
-        const lng =
-          override.lng ??
-          (Number.isFinite(location?.lng) ? String(location.lng) : "");
+        const location = matchStationLocation(station, selectedWaterbody, stationLocations);
+        const lat = override.lat ?? (Number.isFinite(location?.lat) ? String(location.lat) : "");
+        const lng = override.lng ?? (Number.isFinite(location?.lng) ? String(location.lng) : "");
         return {
           key: assignmentKey,
           station,
@@ -531,10 +687,26 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
   const stationColumns = [
     { title: "No.", dataIndex: "stnNo", key: "stnNo", width: 60 },
     {
-      title: "Station",
+      title: "Station ID",
       dataIndex: "name",
       key: "name",
-      render: (name) => <strong style={{ fontWeight: 600 }}>{name || "—"}</strong>,
+      render: (name, row) => (
+        <strong style={{ fontWeight: 600 }}>{row.station.stnId || name || "—"}</strong>
+      ),
+    },
+    {
+      title: "Address",
+      dataIndex: "address",
+      key: "address",
+      responsive: ["lg"],
+      render: (address) => address || <em style={{ color: "#94a3b8" }}>—</em>,
+    },
+    {
+      title: "Class",
+      key: "classInfo",
+      render: (_, row) => (
+        <span style={{ fontSize: 12 }}>{row.station.classInfo || "—"}</span>
+      ),
     },
     {
       title: "Coordinates",
@@ -545,13 +717,6 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
         ) : (
           <Tag>Not set</Tag>
         ),
-    },
-    {
-      title: "Address",
-      dataIndex: "address",
-      key: "address",
-      responsive: ["lg"],
-      render: (address) => address || <em style={{ color: "#94a3b8" }}>—</em>,
     },
     {
       title: "Assigned Waterbody",
@@ -585,8 +750,67 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     setEditStation(null);
   };
 
+  const isPastYear = activeYear !== 2026;
+
   return (
     <div className="waterbody-settings-panel">
+      {/* ── Year selector ── */}
+      <div className="wbs-year-bar">
+        <span className="wbs-year-label">Editing year:</span>
+        <div className="wbs-year-chips">
+          {ALL_EDITABLE_YEARS.map((yr) => (
+            <button
+              key={yr}
+              type="button"
+              className={`wbs-year-chip${activeYear === yr ? " active" : ""}`}
+              onClick={() => setActiveYear(yr)}
+            >
+              {yr}{yr === 2026 ? " (live)" : ""}
+            </button>
+          ))}
+        </div>
+        {isPastYear && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              loading={syncing}
+              onClick={refetchFromServer}
+            >
+              Re-fetch from server
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              icon={<CloudServerOutlined />}
+              loading={syncing}
+              onClick={pushYearToServer}
+            >
+              Push edits to server
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {isPastYear && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 14 }}
+          message={`Editing WQM ${activeYear} data`}
+          description={
+            `Changes made here update the locally-cached copy of ${activeYear}. Use "Push edits to server" to persist them to MongoDB so Chart Configuration and historical charts always reflect the corrections.`
+          }
+        />
+      )}
+
+      {histLoading && isPastYear && (
+        <div style={{ padding: "1rem 0", color: "var(--text-secondary)" }}>
+          Loading {activeYear} data from server…
+        </div>
+      )}
+
+      {/* ── Waterbody picker + profile actions ── */}
       <div
         style={{
           display: "flex",
@@ -623,7 +847,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
           onClick={deleteWaterbody}
           disabled={!selectedWaterbody}
         >
-          Delete Waterbody
+          Delete Waterbody{isPastYear ? ` (${activeYear})` : ""}
         </Button>
       </div>
 
@@ -631,10 +855,17 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
         <>
           <div className="station-regroup-head">
             <div>
-              <h4>Station Regrouping &amp; Locations</h4>
+              <h4>
+                Station Regrouping &amp; Locations
+                {isPastYear && (
+                  <Tag color="orange" style={{ marginLeft: 8, fontWeight: 400, fontSize: 11 }}>
+                    WQM {activeYear}
+                  </Tag>
+                )}
+              </h4>
               <p>
-                Edit station names, coordinates, and addresses, or move stations
-                into another waterbody.
+                Edit station IDs, class, coordinates, and addresses.
+                {isPastYear ? ` Changes affect the ${activeYear} dataset used by Chart Configuration.` : ' Moves stations between waterbodies.'}
               </p>
             </div>
             <Tag color="blue">{selectedStations.length} stations</Tag>
@@ -646,7 +877,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
             dataSource={stationRows}
             pagination={{ pageSize: 10, showSizeChanger: true }}
             scroll={{ x: "max-content" }}
-            locale={{ emptyText: "No stations are available for this waterbody." }}
+            locale={{ emptyText: `No stations are available for this waterbody in WQM ${activeYear}.` }}
           />
         </>
       )}
@@ -658,7 +889,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
         title={
           <Space>
             <EditOutlined />
-            <span>Edit Waterbody Profile</span>
+            <span>Edit Waterbody Profile {isPastYear ? `(WQM ${activeYear})` : ""}</span>
           </Space>
         }
         footer={
@@ -676,37 +907,67 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
       >
         {selectedWaterbody && (
           <Form layout="vertical" style={{ marginTop: 8 }}>
-            <Form.Item label="Profile Name" style={{ marginBottom: 12 }}>
-              <Input
-                value={current.profileName || selectedWaterbody.name}
-                onChange={(e) => updateSetting("profileName", e.target.value)}
-              />
-            </Form.Item>
-            <Form.Item label="Waterbody Assignment" style={{ marginBottom: 12 }}>
-              <Input
-                value={current.assignedWaterbody || selectedWaterbody.name}
-                onChange={(e) =>
-                  updateSetting("assignedWaterbody", e.target.value)
-                }
-              />
-            </Form.Item>
-            <Form.Item label="Station Location Source" style={{ marginBottom: 12 }}>
-              <Select
-                value={current.locationSource || "workbook"}
-                onChange={(value) => updateSetting("locationSource", value)}
-                options={[
-                  { value: "workbook", label: "Workbook station list" },
-                  { value: "manual", label: "Manual assignment" },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item label="Profile Notes" style={{ marginBottom: 0 }}>
-              <Input.TextArea
-                rows={3}
-                value={current.notes || ""}
-                onChange={(e) => updateSetting("notes", e.target.value)}
-              />
-            </Form.Item>
+            {activeYear === 2026 ? (
+              <>
+                <Form.Item label="Profile Name" style={{ marginBottom: 12 }}>
+                  <Input
+                    value={current.profileName || selectedWaterbody.name}
+                    onChange={(e) => updateSetting("profileName", e.target.value)}
+                  />
+                </Form.Item>
+                <Form.Item label="Waterbody Assignment" style={{ marginBottom: 12 }}>
+                  <Input
+                    value={current.assignedWaterbody || selectedWaterbody.name}
+                    onChange={(e) => updateSetting("assignedWaterbody", e.target.value)}
+                  />
+                </Form.Item>
+                <Form.Item label="Station Location Source" style={{ marginBottom: 12 }}>
+                  <Select
+                    value={current.locationSource || "workbook"}
+                    onChange={(value) => updateSetting("locationSource", value)}
+                    options={[
+                      { value: "workbook", label: "Workbook station list" },
+                      { value: "manual", label: "Manual assignment" },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item label="Profile Notes" style={{ marginBottom: 0 }}>
+                  <Input.TextArea
+                    rows={3}
+                    value={current.notes || ""}
+                    onChange={(e) => updateSetting("notes", e.target.value)}
+                  />
+                </Form.Item>
+              </>
+            ) : (
+              <>
+                <Form.Item label="Waterbody Name" style={{ marginBottom: 12 }}>
+                  <Input
+                    placeholder="e.g. Baler Bay"
+                    value={profileNameDraft}
+                    onChange={(e) => {
+                      setProfileNameDraft(e.target.value);
+                      updateWaterbodyName(e.target.value);
+                    }}
+                  />
+                </Form.Item>
+                <Form.Item label="Waterbody Class" style={{ marginBottom: 12 }}>
+                  <Input
+                    placeholder="e.g. C, SB"
+                    value={profileClassDraft}
+                    onChange={(e) => {
+                      setProfileClassDraft(e.target.value);
+                      updateWaterbodyClassInfo(e.target.value);
+                    }}
+                  />
+                </Form.Item>
+                <Alert
+                  type="info"
+                  showIcon
+                  message={`After editing, use "Push edits to server" on the main panel to permanently save WQM ${activeYear} changes to MongoDB.`}
+                />
+              </>
+            )}
           </Form>
         )}
       </Modal>
@@ -718,21 +979,50 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
         title={
           <Space>
             <EnvironmentOutlined />
-            <span>Edit Station</span>
+            <span>Edit Station{isPastYear ? ` (WQM ${activeYear})` : ""}</span>
           </Space>
         }
         okText="Save"
         onOk={saveStationEdit}
-        width={560}
+        width={700}
         destroyOnClose
       >
         {editStation && (
           <Form layout="vertical" style={{ marginTop: 8 }}>
-            <Form.Item label="Station Name" style={{ marginBottom: 12 }}>
+            <Row gutter={12}>
+              <Col span={12}>
+                <Form.Item label="Station ID" style={{ marginBottom: 12 }}>
+                  <Input
+                    value={editStation.station.stnId}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      updateStationField(editStation.stnNo, "stnId", v);
+                      setEditStation((s) => ({ ...s, station: { ...s.station, stnId: v }, name: v }));
+                    }}
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item label="Class" style={{ marginBottom: 12 }}>
+                  <Input
+                    placeholder="e.g. C, SB"
+                    value={editStation.station.classInfo || ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      updateStationField(editStation.stnNo, "classInfo", v);
+                      setEditStation((s) => ({ ...s, station: { ...s.station, classInfo: v } }));
+                    }}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item label="Station Name Override (display)" style={{ marginBottom: 12 }}>
               <Input
                 value={editStation.name}
                 onChange={(e) => {
-                  updateStationOverride(editStation.station, "name", e.target.value);
+                  if (activeYear === 2026) {
+                    updateStationOverride(editStation.station, "name", e.target.value);
+                  }
                   setEditStation((s) => ({ ...s, name: e.target.value }));
                 }}
               />
@@ -745,8 +1035,10 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
                     placeholder="e.g. 14.9057"
                     value={editStation.lat}
                     onChange={(e) => {
-                      updateStationOverride(editStation.station, "lat", e.target.value);
-                      setEditStation((s) => ({ ...s, lat: e.target.value }));
+                      const v = e.target.value;
+                      if (activeYear === 2026) updateStationOverride(editStation.station, "lat", v);
+                      else updateStationField(editStation.stnNo, "lat", v);
+                      setEditStation((s) => ({ ...s, lat: v }));
                     }}
                   />
                 </Form.Item>
@@ -758,36 +1050,49 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
                     placeholder="e.g. 121.0641"
                     value={editStation.lng}
                     onChange={(e) => {
-                      updateStationOverride(editStation.station, "lng", e.target.value);
-                      setEditStation((s) => ({ ...s, lng: e.target.value }));
+                      const v = e.target.value;
+                      if (activeYear === 2026) updateStationOverride(editStation.station, "lng", v);
+                      else updateStationField(editStation.stnNo, "lng", v);
+                      setEditStation((s) => ({ ...s, lng: v }));
                     }}
                   />
                 </Form.Item>
               </Col>
             </Row>
-            <Form.Item label="Address" style={{ marginBottom: 12 }}>
+            <Form.Item label="Address" style={{ marginBottom: isPastYear ? 12 : 0 }}>
               <Input
                 placeholder="Barangay, Municipality, Province"
                 value={editStation.address}
                 onChange={(e) => {
-                  updateStationOverride(editStation.station, "address", e.target.value);
-                  setEditStation((s) => ({ ...s, address: e.target.value }));
+                  const v = e.target.value;
+                  if (activeYear === 2026) updateStationOverride(editStation.station, "address", v);
+                  else updateStationField(editStation.stnNo, "address", v);
+                  setEditStation((s) => ({ ...s, address: v }));
                 }}
               />
             </Form.Item>
-            <Form.Item label="Assigned Waterbody" style={{ marginBottom: 0 }}>
-              <Select
-                value={editStation.assignedKey}
-                onChange={(value) => {
-                  updateStationAssignment(editStation.station, value);
-                  setEditStation((s) => ({ ...s, assignedKey: value }));
-                }}
-                options={waterbodies.map((wb) => ({
-                  value: wb.key,
-                  label: wb.name,
-                }))}
+            {!isPastYear && (
+              <Form.Item label="Assigned Waterbody" style={{ marginBottom: 0 }}>
+                <Select
+                  value={editStation.assignedKey}
+                  onChange={(value) => {
+                    updateStationAssignment(editStation.station, value);
+                    setEditStation((s) => ({ ...s, assignedKey: value }));
+                  }}
+                  options={waterbodies.map((wb) => ({
+                    value: wb.key,
+                    label: wb.name,
+                  }))}
+                />
+              </Form.Item>
+            )}
+            {isPastYear && (
+              <Alert
+                type="info"
+                showIcon
+                message={`Changes will be saved to the local ${activeYear} copy. Push to server to persist across all views.`}
               />
-            </Form.Item>
+            )}
           </Form>
         )}
       </Modal>
@@ -2096,6 +2401,329 @@ const AiForecastPanel = () => {
   );
 };
 
+const LCM_PREVIEW_COLORS = [
+  "#446ACB",
+  "#7CB675",
+  "#e07b54",
+  "#a78bfa",
+  "#f59e0b",
+  "#06b6d4",
+];
+
+const LineChartMergePanel = ({ currentUser }) => {
+  const sheets = useWqmSheets();
+  const canManage = ["admin", "developer"].includes(currentUser?.role);
+
+  const initial = getLineChartMergeSettings();
+  const [draftEnabled, setDraftEnabled] = useState(initial.includeHistoricalYears);
+  const [draftYears, setDraftYears] = useState(
+    Array.isArray(initial.historicalYears) ? initial.historicalYears : [],
+  );
+  const [savedEnabled, setSavedEnabled] = useState(initial.includeHistoricalYears);
+  const [savedYears, setSavedYears] = useState(
+    Array.isArray(initial.historicalYears) ? initial.historicalYears : [],
+  );
+
+  // Historical year options are all available years except the published year
+  // (2026 is always included when enabled — no point making it a checkbox).
+  const historicalOptions = WQM_YEAR_OPTIONS.filter((y) => y !== 2026);
+
+  const toggleYear = (yr) => {
+    setDraftYears((prev) =>
+      prev.includes(yr) ? prev.filter((y) => y !== yr) : [...prev, yr],
+    );
+  };
+
+  // All years for the preview: selected historical + 2026
+  const previewYears = useMemo(() => {
+    if (!draftEnabled || !draftYears.length) return [2026];
+    const sorted = [...draftYears].sort((a, b) => a - b);
+    return sorted.includes(2026) ? sorted : [...sorted, 2026];
+  }, [draftEnabled, draftYears]);
+
+  const { map: previewSheetsMap, loading: previewLoading } = useAllYearSheets(previewYears);
+
+  // Pick a representative waterbody + param for the preview chart. When past
+  // years are included, prefer a waterbody/parameter that actually has data in
+  // multiple of the selected years so the preview visibly spans those years.
+  const previewMeta = useMemo(() => {
+    const options = buildWaterbodyOptions(sheets);
+    const hasMonthly = (yr, key, param) => {
+      const yrSheets = previewSheetsMap.get(yr) || [];
+      const sheet = yrSheets.find((s) => s.key === key);
+      const stations = getReadableStations(sheet);
+      return stations.some((station) =>
+        MONTHS_SHORT.some(
+          (_, index) => getMonthlyNumber(getParamData(station, param), index) !== null,
+        ),
+      );
+    };
+
+    if (draftEnabled && draftYears.length) {
+      let best = null;
+      for (const waterbody of options) {
+        const sheet = sheets.find((item) => item.key === waterbody.key);
+        const stations = getReadableStations(sheet);
+        const params = getAvailableParams(stations, false);
+        for (const param of params) {
+          const coverage = previewYears.filter((yr) => hasMonthly(yr, waterbody.key, param)).length;
+          if (coverage >= 2 && (!best || coverage > best.coverage)) {
+            best = { waterbodyKey: waterbody.key, name: waterbody.name, param, coverage };
+            if (coverage === previewYears.length) return best;
+          }
+        }
+      }
+      if (best) return best;
+    }
+
+    // Fallback: first waterbody/param with current-year monthly data.
+    for (const waterbody of options) {
+      const sheet = sheets.find((item) => item.key === waterbody.key);
+      const stations = getReadableStations(sheet);
+      const params = getAvailableParams(stations, false);
+      const param = params.find((candidate) =>
+        stations.some((station) =>
+          MONTHS_SHORT.some(
+            (_, index) => getMonthlyNumber(getParamData(station, candidate), index) !== null,
+          ),
+        ),
+      );
+      if (param) return { waterbodyKey: waterbody.key, name: waterbody.name, param };
+    }
+    return null;
+  }, [sheets, draftEnabled, draftYears, previewYears, previewSheetsMap]);
+
+  const previewData = useMemo(() => {
+    if (!previewMeta) return [];
+    if (!draftEnabled) {
+      // Single-year: per-station lines for 2026
+      const sheet = sheets.find((s) => s.key === previewMeta.waterbodyKey);
+      const stations = getReadableStations(sheet);
+      const stationKeys = stations.map((stn, i) => ({
+        station: stn,
+        key: `s${i}`,
+        color: LCM_PREVIEW_COLORS[i % LCM_PREVIEW_COLORS.length],
+      }));
+      return {
+        mode: "per-station",
+        points: MONTHS_SHORT.map((label, mi) => {
+          const point = { label };
+          stationKeys.forEach(({ station, key }) => {
+            point[key] = getMonthlyNumber(getParamData(station, previewMeta.param), mi);
+          });
+          return point;
+        }),
+        stationKeys,
+      };
+    }
+    // Multi-year: single merged line
+    return {
+      mode: "multi-year",
+      points: buildMultiYearTrend(
+        previewSheetsMap,
+        previewYears,
+        previewMeta.waterbodyKey,
+        previewMeta.param,
+        MONTHS_SHORT,
+        getParamData,
+        getMonthlyNumber,
+        getReadableStations,
+      ),
+    };
+  }, [draftEnabled, draftYears, previewMeta, previewSheetsMap, previewYears, sheets]);
+
+  const dirty =
+    draftEnabled !== savedEnabled ||
+    JSON.stringify([...draftYears].sort()) !== JSON.stringify([...savedYears].sort());
+
+  const handleSave = () => {
+    setLineChartMergeSettings({
+      includeHistoricalYears: draftEnabled,
+      historicalYears: draftYears,
+    });
+    setSavedEnabled(draftEnabled);
+    setSavedYears([...draftYears]);
+    logActivity("Updated line chart historical data setting", {
+      includeHistoricalYears: draftEnabled,
+      historicalYears: draftYears,
+    }, currentUser);
+    toastSaved(
+      draftEnabled && draftYears.length
+        ? `Historical data enabled: ${[...draftYears].sort((a, b) => a - b).join(", ")} + 2026 will now appear on all line charts.`
+        : "Line charts will show the current published year only.",
+    );
+  };
+
+  if (!canManage) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        message="Developer or administrator access required"
+        description="Only developers and administrators can change the historical data settings for line charts."
+      />
+    );
+  }
+
+  return (
+    <div className="linechart-merge-panel">
+      {/* ── Feature toggle ── */}
+      <div className="lcm-row">
+        <div>
+          <strong>Include historical years in line charts</strong>
+          <p className="section-desc" style={{ margin: "0.25rem 0 0" }}>
+            When enabled, monthly readings from past years are stitched together
+            with the current year so every line chart (the Dashboard monthly
+            trend and Waterbody Profile trend) shows a continuous multi-year
+            trend instead of a single year. This makes it easy to see whether
+            parameter levels are improving, declining, or staying stable over
+            multiple monitoring cycles.
+          </p>
+        </div>
+        <Switch
+          checked={draftEnabled}
+          onChange={setDraftEnabled}
+          checkedChildren="Multi-year"
+          unCheckedChildren="Single year"
+        />
+      </div>
+
+      {/* ── Year selector ── */}
+      {draftEnabled && (
+        <div className="lcm-year-selector">
+          <strong>Which past years to include?</strong>
+          <p className="section-desc" style={{ margin: "0.2rem 0 0.6rem" }}>
+            The current year (2026) is always included as the latest data.
+            Check the years below to extend the trend further back.
+          </p>
+          <div className="lcm-year-chips">
+            {historicalOptions.map((yr) => (
+              <button
+                key={yr}
+                type="button"
+                className={`lcm-year-chip${draftYears.includes(yr) ? " selected" : ""}`}
+                onClick={() => toggleYear(yr)}
+              >
+                {yr}
+              </button>
+            ))}
+            <span className="lcm-year-chip always-on" aria-label="2026 is always included">
+              2026 ✓
+            </span>
+          </div>
+          {draftEnabled && !draftYears.length && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginTop: 8 }}
+              message="Select at least one historical year to extend the trend, or turn off multi-year mode."
+            />
+          )}
+        </div>
+      )}
+
+      {/* ── Live preview chart ── */}
+      <div className="lcm-preview">
+        <div className="lcm-preview-head">
+          <strong>
+            Preview ·{" "}
+            {draftEnabled && draftYears.length
+              ? `${[...draftYears].sort((a, b) => a - b).join(", ")} + 2026 merged trend`
+              : "Single year (2026)"}
+          </strong>
+          {previewMeta && (
+            <span className="section-desc">
+              {previewMeta.name} · {previewMeta.param}
+            </span>
+          )}
+        </div>
+        {previewLoading ? (
+          <div className="section-desc" style={{ padding: "1.5rem 0" }}>
+            Loading historical data for preview…
+          </div>
+        ) : previewMeta ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart
+              data={previewData.points}
+              margin={{ top: 8, right: 16, left: -8, bottom: 0 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 9.5 }}
+                interval="preserveStartEnd"
+                angle={-28}
+                textAnchor="end"
+                height={42}
+              />
+              <YAxis tick={{ fontSize: 11 }} />
+              <RechartsTooltip />
+              {previewData.mode === "multi-year" ? (
+                <Line
+                  type="monotone"
+                  dataKey="merged"
+                  name="Waterbody average"
+                  stroke="#446ACB"
+                  strokeWidth={2.6}
+                  dot={{ r: 2.5 }}
+                  connectNulls
+                />
+              ) : (
+                (previewData.stationKeys || []).map(({ station, key, color }) => (
+                  <Line
+                    key={key}
+                    type="monotone"
+                    dataKey={key}
+                    name={station.stnId}
+                    stroke={color}
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls
+                  />
+                ))
+              )}
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="section-desc">
+            No monthly readings are available in the published dataset to
+            preview.
+          </p>
+        )}
+      </div>
+
+      {/* ── Actions ── */}
+      <div className="lcm-actions">
+        <Button
+          onClick={() => {
+            setDraftEnabled(savedEnabled);
+            setDraftYears([...savedYears]);
+          }}
+          disabled={!dirty}
+        >
+          Discard changes
+        </Button>
+        <Button
+          type="primary"
+          onClick={handleSave}
+          disabled={!dirty || (draftEnabled && !draftYears.length)}
+        >
+          Save &amp; apply to all line charts
+        </Button>
+      </div>
+
+      {!dirty && savedEnabled && savedYears.length > 0 && (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginTop: 12 }}
+          message={`Multi-year trend is active: ${[...savedYears].sort((a, b) => a - b).join(", ")} + 2026 are shown on all line charts.`}
+        />
+      )}
+    </div>
+  );
+};
+
 const Settings = ({ initialSection = "accounts" }) => {
   const { user } = useAuth();
   const { theme, toggle } = useTheme();
@@ -2152,6 +2780,19 @@ const Settings = ({ initialSection = "accounts" }) => {
                 station-to-waterbody assignment metadata.
               </p>
               <WaterbodyProfileSettings currentUser={user} />
+            </section>
+          )}
+
+          {active === "chart-config" && (
+            <section className="settings-section">
+              <h3>Chart Configuration</h3>
+              <p className="section-desc">
+                Explore every parameter for a station as a continuous multi-year
+                line chart (2024, 2025, and 2026 merged for the same station),
+                each with a one-month forecast, interpretation, and a full
+                readings table.
+              </p>
+              <ChartConfiguration />
             </section>
           )}
 
@@ -2230,6 +2871,19 @@ const Settings = ({ initialSection = "accounts" }) => {
                 forecast engine status.
               </p>
               <AiForecastPanel />
+            </section>
+          )}
+
+          {active === "linechart" && (
+            <section className="settings-section">
+              <h3>Line Chart Data</h3>
+              <p className="section-desc">
+                Extend line charts across multiple monitoring years so trends
+                from 2024 and 2025 are shown alongside the current 2026 data.
+                Select the past years you want to include, preview the result,
+                and save to apply it to every line chart in the app.
+              </p>
+              <LineChartMergePanel currentUser={user} />
             </section>
           )}
 

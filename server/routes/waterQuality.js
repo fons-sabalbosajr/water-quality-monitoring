@@ -51,7 +51,7 @@ const importWqmYear = async (year) => {
   return WqmDataset.findOneAndUpdate(
     { year },
     { year, sheets, sourceFile, importedAt: new Date() },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+    { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
   );
 };
 
@@ -142,7 +142,7 @@ router.put('/wqm/:year', protect, adminProtect, async (req, res) => {
     const dataset = await WqmDataset.findOneAndUpdate(
       { year },
       { sheets, importedAt: new Date() },
-      { new: true, upsert: true, setDefaultsOnInsert: true },
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
     );
     return res.json({
       message: `WQM ${year} saved to MongoDB.`,

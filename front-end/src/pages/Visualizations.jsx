@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
-import { Button, Card, Select, Space, Statistic, Tag } from 'antd';
+import { Button, Card, Modal, Select, Space, Statistic, Table, Tag } from 'antd';
 import { LineChartOutlined } from '@ant-design/icons';
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Legend,
@@ -276,6 +276,41 @@ const FORECAST_ENGINES = {
   },
 };
 
+// Round to at most 2 decimal places for display-friendly forecast values.
+const round2 = (value) => {
+  const num = Number(value);
+  return value === null || value === undefined || !Number.isFinite(num)
+    ? value
+    : Number(num.toFixed(2));
+};
+
+// Keep forecast values physically sensible per parameter — no negative
+// concentrations or counts, and pH constrained to 0–14 — then round to 2 dp.
+const clampForecastValue = (param, value) => {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return value;
+  const num = Number(value);
+  const isPh = /(^|\b)ph\b/i.test(String(param));
+  const bounded = isPh ? Math.min(14, Math.max(0, num)) : Math.max(0, num);
+  return Number(bounded.toFixed(2));
+};
+
+// Animated pulsing dot drawn only on projected (forecast) points.
+const ForecastDot = ({ cx, cy, payload }) => {
+  if (
+    cx === undefined || cy === undefined
+    || !payload?.isForecast
+    || payload?.forecast === null || payload?.forecast === undefined
+  ) {
+    return null;
+  }
+  return (
+    <g>
+      <circle className="forecast-dot-pulse" cx={cx} cy={cy} r="5.5" fill="#f59e0b" />
+      <circle cx={cx} cy={cy} r="3" fill="#f59e0b" stroke="var(--bg-card)" strokeWidth="1.5" />
+    </g>
+  );
+};
+
 const getValueRange = (values) => {
   const valid = values.filter((value) => Number.isFinite(value));
   if (!valid.length) return null;
@@ -291,6 +326,19 @@ const chartDefinitions = {
   radar: 'Normalized station profile from 0 to 100 so parameters with different units can be compared in one shape.',
   scatter: 'Pairwise parameter plots with a regression line to reveal possible relationships between pollutant indicators.',
   forecast: 'Short horizon projection from the latest available monthly trend. Charts are computed in-browser for fast station screening.',
+};
+
+// Plain-language stories for each chart so non-technical readers understand what
+// they are looking at and why it matters. Kept conversational on purpose.
+const chartNarratives = {
+  heatmap: 'Think of this as a color-coded report card for the whole waterbody at a glance. Each row is a water quality measure and each column is a monitoring station. The warmer and bolder a box looks, the higher that reading is compared to what is considered safe — so the eye-catching cells are the ones worth checking first.',
+  'fecal-trophic': 'This view answers two everyday questions: is the water clean enough to be near, and is it getting overloaded with nutrients? The timeline and map show where germ levels are highest, while the nutrient bars hint at whether algae could start taking over. Bigger and brighter usually means more attention is needed.',
+  fecal: 'This is about safety from harmful bacteria. The timeline shows how contamination rises and falls during the year, and the map points to exactly where the dirtiest spots are. Larger, brighter markers flag places where swimming, fishing, or bathing could be risky.',
+  trophic: 'These bars compare the “food” and oxygen in the water at each station. Too much nutrient with too little oxygen is the recipe for algae blooms that can choke a river or lake. The taller nutrient bars quietly point to spots that could be heading that way.',
+  seasonal: 'Rivers and lakes naturally behave differently in the rainy and dry months. This chart groups the readings by season so you can see those swings — for example, whether heavy rains tend to wash more pollution into the water — instead of mistaking a normal seasonal change for a new problem.',
+  radar: 'Each shape is a quick “health profile” of a station. Every spoke is a different measure scaled to the same 0–100 range, so a bigger, more even shape generally means healthier water. It makes comparing several stations side by side fast and intuitive.',
+  scatter: 'Every dot links two measurements taken at the same place and time. When the dots line up nicely along the slanted line, the two measures tend to rise and fall together — a clue that they may share the same cause or pollution source.',
+  forecast: 'This is a simple look-ahead. Using the most recent months, it sketches where each measure might be heading next. The shaded band shows how confident the estimate is — the wider it gets, the less certain the outlook. Treat it as an early heads-up rather than a promise.',
 };
 
 const VisualizationView = ({ type }) => {
@@ -311,6 +359,7 @@ const VisualizationView = ({ type }) => {
   const [forecastStationKey, setForecastStationKey] = useState('');
   const [forecastExpandedKey, setForecastExpandedKey] = useState('');
   const [forecastEngine, setForecastEngine] = useState('prophet');
+  const [forecastDetail, setForecastDetail] = useState(null);
   const forecastMonths = useForecastMonths();
   const currentMonthIndex = useMemo(() => getCurrentMonthIndex(stations, params), [params, stations]);
   const periodLabel = selectedSheet?.periodLabels?.[currentMonthIndex] || MONTHS_SHORT[currentMonthIndex];
@@ -493,11 +542,41 @@ const VisualizationView = ({ type }) => {
     const buildForecast = (FORECAST_ENGINES[forecastEngine] || FORECAST_ENGINES.prophet).build;
     return visibleForecastParams
       .map((param, cardIndex) => {
-        const observed = MONTHS_SHORT.map((month, index) => ({
+        const monthly = MONTHS_SHORT.map((month, index) => ({
           month,
+          index,
           actual: getMonthlyNumber(getParamData(activeForecastStation, param), index),
-        })).filter((point) => point.actual !== null);
-        const technical = buildForecast(observed, forecastMonths);
+        }));
+        const observed = monthly
+          .filter((point) => point.actual !== null)
+          .map((point) => ({ month: point.month, actual: round2(point.actual) }));
+        // Calendar index of the most recent month that has a reading — the
+        // forecast horizon is labelled with the months that follow it.
+        const lastObservedIndex = monthly.reduce(
+          (last, point) => (point.actual !== null ? point.index : last),
+          -1,
+        );
+        const technical = buildForecast(
+          monthly
+            .filter((point) => point.actual !== null)
+            .map((point) => ({ month: point.month, actual: point.actual })),
+          forecastMonths,
+        );
+        // Relabel projected points with the real succeeding month names and keep
+        // the values within sensible bounds for the parameter (2 decimals).
+        const forecastPoints = technical.points.map((point, index) => {
+          const monthName = lastObservedIndex >= 0
+            ? MONTHS_SHORT[(lastObservedIndex + 1 + index) % 12]
+            : point.month;
+          return {
+            ...point,
+            month: monthName,
+            isForecast: true,
+            forecast: clampForecastValue(param, point.forecast),
+            lower: clampForecastValue(param, point.lower),
+            upper: clampForecastValue(param, point.upper),
+          };
+        });
         // Bridge the forecast onto the last observed reading so the (differently
         // coloured) forecast line connects to the current readings instead of
         // starting from a detached point.
@@ -511,7 +590,8 @@ const VisualizationView = ({ type }) => {
           color: COLORS[cardIndex % COLORS.length],
           observed,
           diagnostics: technical.diagnostics,
-          data: bridged.concat(technical.points),
+          forecastPoints,
+          data: bridged.concat(forecastPoints),
         };
       })
       .filter((card) => card.observed.length);
@@ -581,6 +661,61 @@ const VisualizationView = ({ type }) => {
       : 'No monthly station readings are available for a forecast preview.',
   };
 
+  // Result-and-observation narrative for the radar/spider chart, derived from the
+  // selected waterbody's own readings so it reads like an analyst's summary.
+  const radarAnalysis = (() => {
+    if (!radarStations.length || !radarParams.length) {
+      return 'There are not enough current station readings for this waterbody to build a radar profile yet.';
+    }
+    const stationScores = radarStations.map((station) => {
+      const scores = radarParams
+        .map((param) => normalizeScore(param, getCurrentParamValue(station, param, currentMonthIndex)))
+        .filter((score) => Number.isFinite(score));
+      const avg = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0;
+      return { stnId: station.stnId, avg };
+    });
+    const widest = [...stationScores].sort((a, b) => b.avg - a.avg)[0];
+    const tightest = [...stationScores].sort((a, b) => a.avg - b.avg)[0];
+
+    const paramStats = radarParams.map((param) => {
+      const values = radarStations
+        .map((station) => normalizeScore(param, getCurrentParamValue(station, param, currentMonthIndex)))
+        .filter((score) => Number.isFinite(score));
+      const max = values.length ? Math.max(...values) : 0;
+      const min = values.length ? Math.min(...values) : 0;
+      return { param, spread: max - min, max };
+    });
+    const dominant = [...paramStats].sort((a, b) => b.max - a.max)[0];
+    const mostVaried = [...paramStats].sort((a, b) => b.spread - a.spread)[0];
+    const name = selected?.name || 'this waterbody';
+
+    const sentences = [
+      `For ${name} as of ${currentMonthLabel}, ${widest.stnId} shows the most expanded profile — its readings sit highest overall across the ${radarParams.length} parameters compared.`,
+    ];
+    if (tightest && tightest.stnId !== widest.stnId) {
+      sentences.push(`${tightest.stnId} keeps the most compact shape, suggesting generally lower or more balanced readings.`);
+    }
+    if (dominant) {
+      sentences.push(`${dominant.param} stretches the chart out the most, so it is the parameter pushing stations toward their limits.`);
+    }
+    if (mostVaried && mostVaried.spread > 8 && mostVaried.param !== dominant?.param) {
+      sentences.push(`${mostVaried.param} differs the most from one station to another, meaning the monitoring points disagree most on that measure.`);
+    }
+    sentences.push('Larger, more lopsided shapes are the ones worth checking first.');
+    return sentences.join(' ');
+  })();
+
+  const narrative = type === 'radar' ? radarAnalysis : chartNarratives[type];
+  const NarrativeNote = narrative ? (
+    <div className="viz-narrative">
+      <span className="viz-narrative-icon" aria-hidden="true">i</span>
+      <div className="viz-narrative-body">
+        <strong>{type === 'radar' ? 'Observation & analysis' : 'What this is telling you'}</strong>
+        <p>{narrative}</p>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="viz-page">
       <section className="viz-header">
@@ -637,6 +772,7 @@ const VisualizationView = ({ type }) => {
               </div>
             ))}
           </div>
+          {NarrativeNote}
         </section>
       )}
 
@@ -668,6 +804,7 @@ const VisualizationView = ({ type }) => {
               />
             </Suspense>
           </article>
+          {NarrativeNote}
         </section>
       )}
 
@@ -687,6 +824,7 @@ const VisualizationView = ({ type }) => {
               <Bar dataKey="Temp" fill="#f59e0b" />
             </BarChart>
           </ResponsiveContainer>
+          {NarrativeNote}
         </section>
       )}
 
@@ -705,6 +843,7 @@ const VisualizationView = ({ type }) => {
               <Bar dataKey="Fecal" fill="#e07b54" />
             </BarChart>
           </ResponsiveContainer>
+          {NarrativeNote}
         </section>
       )}
 
@@ -723,6 +862,7 @@ const VisualizationView = ({ type }) => {
               ))}
             </RadarChart>
           </ResponsiveContainer>
+          {NarrativeNote}
         </section>
       )}
 
@@ -744,6 +884,7 @@ const VisualizationView = ({ type }) => {
               </ResponsiveContainer>
             </article>
           ))}
+          {NarrativeNote}
         </section>
       )}
 
@@ -752,10 +893,10 @@ const VisualizationView = ({ type }) => {
           <div className="forecast-topline">
             <div>
               <h3>Station Parameter Forecasts</h3>
-              <p>Forecasts use the selected station's monthly values. Choose the Prophet additive engine (linear trend + seasonality + widening interval) or the fast OLS trend. Only the first charts render initially for faster loading.</p>
+              <p>Forecasts use the selected station's monthly values using the Prophet additive engine (linear trend + seasonality + widening interval). Only the first charts render initially for faster loading.</p>
             </div>
             <Space className="forecast-controls" size="middle" wrap>
-              <label>
+              {/* <label>
                 <span>Forecast model</span>
                 <Select
                   value={forecastEngine}
@@ -767,7 +908,7 @@ const VisualizationView = ({ type }) => {
                   classNames={{ popup: { root: 'wqm-map-select-popup' } }}
                   getPopupContainer={(trigger) => trigger.parentElement}
                 />
-              </label>
+              </label> */}
               <label>
                 <span>Station</span>
                 <Select
@@ -793,6 +934,17 @@ const VisualizationView = ({ type }) => {
                   key={card.param}
                   className="forecast-param-card"
                   size="small"
+                  hoverable
+                  role="button"
+                  tabIndex={0}
+                  title="Click to open full forecast details"
+                  onClick={() => setForecastDetail(card)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setForecastDetail(card);
+                    }
+                  }}
                   style={{ '--fc-accent': card.color }}
                 >
                   <div className="forecast-param-head">
@@ -828,10 +980,10 @@ const VisualizationView = ({ type }) => {
                       <XAxis dataKey="month" tick={CHART_TICK} tickLine={false} axisLine={false} />
                       <YAxis tick={CHART_TICK} tickLine={false} axisLine={false} width={42} />
                       <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-                      <Area dataKey="actual" name="Observed" stroke={card.color} strokeWidth={2} fill={`url(#fcObs-${card.param.replace(/\W/g, '')})`} isAnimationActive={false} connectNulls />
-                      <Line dataKey="upper" name="Upper band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive={false} />
-                      <Line dataKey="lower" name="Lower band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive={false} />
-                      <Line dataKey="forecast" name="Forecast" stroke="#f59e0b" strokeWidth={2.4} strokeDasharray="6 4" dot={{ r: 2.5, fill: '#f59e0b' }} isAnimationActive={false} />
+                      <Area dataKey="actual" name="Observed" stroke={card.color} strokeWidth={2} fill={`url(#fcObs-${card.param.replace(/\W/g, '')})`} isAnimationActive animationDuration={900} animationEasing="ease-out" connectNulls />
+                      <Line dataKey="upper" name="Upper band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive animationDuration={900} animationBegin={300} animationEasing="ease-out" />
+                      <Line dataKey="lower" name="Lower band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive animationDuration={900} animationBegin={300} animationEasing="ease-out" />
+                      <Line dataKey="forecast" name="Forecast" stroke="#f59e0b" strokeWidth={2.4} strokeDasharray="6 4" dot={<ForecastDot />} isAnimationActive animationDuration={1100} animationBegin={500} animationEasing="ease-out" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </Card>
@@ -845,8 +997,104 @@ const VisualizationView = ({ type }) => {
           ) : (
             <div className="viz-empty">No station parameters with monthly values are available for this waterbody.</div>
           )}
+          {NarrativeNote}
         </section>
       )}
+
+      <Modal
+        className="forecast-detail-modal"
+        open={Boolean(forecastDetail)}
+        onCancel={() => setForecastDetail(null)}
+        width="min(920px, 96vw)"
+        destroyOnHidden
+        title={forecastDetail ? `${forecastDetail.param} · ${activeForecastStation?.stnId || ''}` : ''}
+        footer={<Button onClick={() => setForecastDetail(null)}>Close</Button>}
+      >
+        {forecastDetail && (
+          <div className="forecast-detail-body">
+            <div className="forecast-detail-stats">
+              <span>Latest: <strong>{fmt(forecastDetail.diagnostics.latest)}</strong></span>
+              <span>Trend: <strong>{forecastDetail.diagnostics.trend}</strong></span>
+              <span>Model fit: <strong>{forecastDetail.diagnostics.confidence}%</strong></span>
+              <span>Horizon: <strong>+{forecastDetail.forecastPoints.length} months</strong></span>
+            </div>
+            <ResponsiveContainer width="100%" height={320}>
+              <AreaChart data={forecastDetail.data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="fcDetailObs" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={forecastDetail.color} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={forecastDetail.color} stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="month" tick={CHART_TICK} />
+                <YAxis tick={CHART_TICK} width={48} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                <Legend wrapperStyle={LEGEND_STYLE} />
+                <Area dataKey="actual" name="Observed" stroke={forecastDetail.color} strokeWidth={2} fill="url(#fcDetailObs)" connectNulls isAnimationActive animationDuration={900} animationEasing="ease-out" />
+                <Line dataKey="upper" name="Upper band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive animationDuration={900} animationBegin={250} animationEasing="ease-out" />
+                <Line dataKey="lower" name="Lower band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive animationDuration={900} animationBegin={250} animationEasing="ease-out" />
+                <Line dataKey="forecast" name="Forecast" stroke="#f59e0b" strokeWidth={2.4} strokeDasharray="6 4" dot={<ForecastDot />} isAnimationActive animationDuration={1100} animationBegin={500} animationEasing="ease-out" />
+              </AreaChart>
+            </ResponsiveContainer>
+            <Table
+              className="forecast-detail-table"
+              size="small"
+              rowKey="key"
+              pagination={false}
+              scroll={{ y: 280 }}
+              dataSource={[
+                ...forecastDetail.observed.map((point, index) => ({
+                  key: `obs-${index}`,
+                  month: point.month,
+                  type: 'Observed',
+                  value: point.actual,
+                  lower: null,
+                  upper: null,
+                  confidence: null,
+                })),
+                ...forecastDetail.forecastPoints.map((point, index) => ({
+                  key: `fc-${index}`,
+                  month: point.month,
+                  type: 'Forecast',
+                  value: point.forecast,
+                  lower: point.lower,
+                  upper: point.upper,
+                  confidence: point.confidence,
+                })),
+              ]}
+              columns={[
+                { title: 'Month', dataIndex: 'month', key: 'month' },
+                {
+                  title: 'Type',
+                  dataIndex: 'type',
+                  key: 'type',
+                  render: (value) => <Tag color={value === 'Forecast' ? 'gold' : 'blue'}>{value}</Tag>,
+                },
+                { title: 'Value', dataIndex: 'value', key: 'value', render: (value) => fmt(value) },
+                {
+                  title: 'Lower',
+                  dataIndex: 'lower',
+                  key: 'lower',
+                  render: (value) => (value === null || value === undefined ? '—' : fmt(value)),
+                },
+                {
+                  title: 'Upper',
+                  dataIndex: 'upper',
+                  key: 'upper',
+                  render: (value) => (value === null || value === undefined ? '—' : fmt(value)),
+                },
+                {
+                  title: 'Confidence',
+                  dataIndex: 'confidence',
+                  key: 'confidence',
+                  render: (value) => (value === null || value === undefined ? '—' : `${value}%`),
+                },
+              ]}
+            />
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

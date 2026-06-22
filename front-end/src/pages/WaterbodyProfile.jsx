@@ -15,7 +15,8 @@ import {
   getAverageNumber, getGaugePercent, getLatestNumber, getObservationEntries,
   getMonthlyNumber, getParamData, getParamStatus, getParamUnit, toTitle,
 } from '../utils/wqmData';
-import { getReadableStations, getWaterbodyProfileName, useWqmSheets } from '../utils/wqmSheets';
+import { getReadableStations, getWaterbodyProfileName, useWqmSheets, useAllYearSheets } from '../utils/wqmSheets';
+import { useLineChartMergeSettings, buildMultiYearTrend } from '../utils/lineChartSettings';
 import './WaterbodyProfile.css';
 
 const STN_COLORS = ['#446ACB','#7CB675','#e07b54','#a78bfa','#f59e0b','#06b6d4','#ec4899','#84cc16'];
@@ -48,20 +49,49 @@ const WaterbodyProfile = ({ waterbodyKey, year = 2026, sheets: providedSheets = 
     ));
   }, [stations]);
 
+  // Parameters available for the Monthly Trend chart: any parameter that has at
+  // least one numeric reading (a monthly value OR an annual average). Parameters
+  // with no data at all stay out so the dropdown never lands on an empty chart,
+  // but average-only parameters are kept so waterbodies that only report annual
+  // averages still appear in the chart (matching the gauge metrics).
+  const trendParams = useMemo(() => availableParams.filter((param) => (
+    param === OBSERVATION_PARAM
+      ? getObservationEntries(stations).length > 0
+      : stations.some((station) => getLatestNumber(getParamData(station, param)) !== null)
+  )), [availableParams, stations]);
+
   const [selectedParam, setSelectedParam] = useState('DO (mg/L)');
   const [paramMenuOpen, setParamMenuOpen] = useState(false);
-  const activeParam = availableParams.includes(selectedParam) ? selectedParam : (availableParams[0] || 'DO (mg/L)');
+  const activeParam = trendParams.includes(selectedParam) ? selectedParam : (trendParams[0] || 'DO (mg/L)');
   const activeUnit = getParamUnit(activeParam);
   const isObservationMode = activeParam === OBSERVATION_PARAM;
 
-  const stationSeries = useMemo(() => stations
-    .filter((station) => isObservationMode || getLatestNumber(getParamData(station, activeParam)) !== null
-      || MONTHS_SHORT.some((_, index) => getMonthlyNumber(getParamData(station, activeParam), index) !== null))
+  // Multi-year historical trend: when the admin enables it the chart spans
+  // multiple years instead of just the current published year.
+  const { includeHistoricalYears, historicalYears } = useLineChartMergeSettings();
+  const allTrendYears = useMemo(() => {
+    if (!includeHistoricalYears || !historicalYears.length) return [];
+    const sorted = [...historicalYears].sort((a, b) => a - b);
+    return sorted.includes(year) ? sorted : [...sorted, year];
+  }, [includeHistoricalYears, historicalYears, year]);
+  const isMultiYear = allTrendYears.length > 0;
+
+  const { map: allYearSheetsMap } = useAllYearSheets(isMultiYear ? allTrendYears : []);
+
+  const rawStationSeries = useMemo(() => stations
+    .filter((station) => isObservationMode
+      || getLatestNumber(getParamData(station, activeParam)) !== null)
     .map((station, index) => ({
     station,
     chartKey: `station_${index}`,
     color: STN_COLORS[index % STN_COLORS.length],
   })), [activeParam, isObservationMode, stations]);
+
+  const stationSeries = useMemo(() => (
+    isMultiYear && !isObservationMode
+      ? [{ station: { stnId: 'Historical trend (all stations)', stnNo: 'merged' }, chartKey: 'merged', color: STN_COLORS[0] }]
+      : rawStationSeries
+  ), [isMultiYear, isObservationMode, rawStationSeries]);
 
   const observationEntries = useMemo(() => getObservationEntries(stations), [stations]);
   const numericParams = useMemo(
@@ -115,18 +145,50 @@ const WaterbodyProfile = ({ waterbodyKey, year = 2026, sheets: providedSheets = 
     return { perStation, totals };
   }, [numericParams, stations]);
 
-  // Monthly chart data for selected parameter (one line per station)
+  // Monthly chart data for selected parameter
   const chartData = useMemo(() => {
     if (isObservationMode) return [];
 
+    // Multi-year mode: stitch months across years into one continuous merged line.
+    if (isMultiYear) {
+      return buildMultiYearTrend(
+        allYearSheetsMap,
+        allTrendYears,
+        waterbodyKey,
+        activeParam,
+        MONTHS_SHORT,
+        getParamData,
+        getMonthlyNumber,
+        getReadableStations,
+      );
+    }
+
+    // Stations that report only an annual average (no monthly breakdown) would
+    // otherwise draw a flat line across all 12 months. That clutters ("jumbles")
+    // the trend when other stations have real monthly data, so the flat-average
+    // fallback is only used when NO station has any monthly reading for the
+    // parameter (i.e. the chart would otherwise be empty).
+    const anyMonthly = rawStationSeries.some(({ station }) =>
+      MONTHS_SHORT.some((_, index) => getMonthlyNumber(getParamData(station, activeParam), index) !== null),
+    );
+    const avgFallbackByKey = {};
+    if (!anyMonthly) {
+      rawStationSeries.forEach(({ station, chartKey }) => {
+        const paramData = getParamData(station, activeParam);
+        const fallback = getAverageNumber(paramData) ?? getLatestNumber(paramData);
+        if (fallback !== null) avgFallbackByKey[chartKey] = fallback;
+      });
+    }
+
     return MONTHS_SHORT.map((label, monthIndex) => {
       const point = { label };
-      stationSeries.forEach(({ station, chartKey }) => {
-        point[chartKey] = getMonthlyNumber(getParamData(station, activeParam), monthIndex);
+      rawStationSeries.forEach(({ station, chartKey }) => {
+        const monthlyValue = getMonthlyNumber(getParamData(station, activeParam), monthIndex);
+        point[chartKey] = monthlyValue !== null ? monthlyValue : (avgFallbackByKey[chartKey] ?? null);
       });
       return point;
-    }).filter((point) => stationSeries.some(({ chartKey }) => point[chartKey] !== null && point[chartKey] !== undefined));
-  }, [activeParam, isObservationMode, stationSeries]);
+    }).filter((point) => rawStationSeries.some(({ chartKey }) => point[chartKey] !== null && point[chartKey] !== undefined));
+  }, [activeParam, isObservationMode, isMultiYear, allYearSheetsMap, allTrendYears, waterbodyKey, rawStationSeries]);
 
   const lastTrendIndexByKey = useMemo(() => stationSeries.reduce((lookup, { chartKey }) => {
     for (let index = chartData.length - 1; index >= 0; index -= 1) {
@@ -188,7 +250,7 @@ const WaterbodyProfile = ({ waterbodyKey, year = 2026, sheets: providedSheets = 
             </button>
             {paramMenuOpen && (
               <div className="wb-param-menu" role="listbox">
-                {availableParams.map((param) => (
+                {trendParams.map((param) => (
                   <button
                     key={param}
                     type="button"

@@ -42,7 +42,11 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
+// Full WQM year datasets (all waterbody sheets, stations and monthly readings)
+// can be several MB, which exceeds body-parser's 100kb default. Raise the limit
+// so saving/pushing a year's data does not fail with PayloadTooLargeError.
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -59,6 +63,11 @@ app.use((req, res) => res.status(404).json({ message: 'Route not found' }));
 
 // Global error handler
 app.use((err, req, res, next) => {
+  if (err?.type === 'entity.too.large' || err?.status === 413) {
+    return res.status(413).json({
+      message: 'The data you are sending is too large. Please try again or contact an administrator.',
+    });
+  }
   console.error(err.stack);
   res.status(500).json({ message: 'Internal server error' });
 });

@@ -79,6 +79,102 @@
   text-transform: uppercase;
 }
 
+.sidebar-brand-system {
+  color: #F2F5FF;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-align: center;
+  line-height: 1.3;
+  margin-top: 0.18rem;
+  padding-top: 0.28rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+/* ── Sidebar collapse / expand ── */
+.sidebar {
+  transition: width 0.22s ease, padding 0.22s ease;
+}
+
+.sidebar-collapse-toggle {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #D6DBF6;
+  cursor: pointer;
+  z-index: 2;
+  transition: background 0.15s ease, transform 0.22s ease;
+}
+
+.sidebar-collapse-toggle:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* Icon points left (collapse) when expanded, right (expand) when collapsed */
+.sidebar-collapse-toggle svg {
+  transform: rotate(180deg);
+  transition: transform 0.22s ease;
+}
+
+.dashboard.is-collapsed .sidebar-collapse-toggle svg {
+  transform: rotate(0deg);
+}
+
+/* Collapse layout applies on tablet/desktop only — phones use the off-canvas
+   overlay driven by the hamburger instead. */
+@media (min-width: 481px) {
+  .dashboard.is-collapsed .sidebar {
+    width: 72px;
+    padding: 1.5rem 0.55rem;
+  }
+
+  .dashboard.is-collapsed .main-content {
+    margin-left: 72px;
+  }
+
+  .dashboard.is-collapsed .sidebar-brand-text,
+  .dashboard.is-collapsed .sidebar-logo-divider,
+  .dashboard.is-collapsed .nav-label,
+  .dashboard.is-collapsed .nav-section-label,
+  .dashboard.is-collapsed .nav-chevron-icon,
+  .dashboard.is-collapsed .nav-badge-admin,
+  .dashboard.is-collapsed .nav-sub-group,
+  .dashboard.is-collapsed .tts-track {
+    display: none;
+  }
+
+  .dashboard.is-collapsed .sidebar-brand {
+    padding: 1.5rem 0 1rem;
+  }
+
+  .dashboard.is-collapsed .sidebar-logos {
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .dashboard.is-collapsed .sidebar-logos img,
+  .dashboard.is-collapsed .sidebar-logos svg {
+    height: 28px;
+  }
+
+  .dashboard.is-collapsed .nav-item {
+    justify-content: center;
+    padding: 0.52rem 0;
+  }
+
+  .dashboard.is-collapsed .theme-toggle-sidebar {
+    justify-content: center;
+  }
+}
+
 .sidebar-nav {
   display: flex;
   flex-direction: column;
@@ -327,6 +423,7 @@
   padding: 1.75rem 2rem;
   min-height: 100vh;
   background: var(--bg-base);
+  transition: margin-left 0.22s ease;
 }
 
 .content-area { flex: 1; }
@@ -865,6 +962,10 @@ tbody tr:hover {
   .sidebar.sidebar-mobile-open .nav-item span:not(.nav-icon),
   .sidebar.sidebar-mobile-open .nav-chevron-icon {
     display: flex;
+  }
+  /* Desktop collapse toggle is not used on phones (use the hamburger) */
+  .sidebar-collapse-toggle {
+    display: none;
   }
   .sidebar.sidebar-mobile-open .sidebar-brand-name,
   .sidebar.sidebar-mobile-open .sidebar-brand-sub {
@@ -2290,6 +2391,19 @@ tbody tr:hover {
   font-size: 0.78rem;
   line-height: 1.45;
   margin: 0;
+}
+
+.corr-interpretation-points {
+  margin: 0.55rem 0 0;
+  padding-left: 1.05rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.corr-interpretation-points li {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
 }
 
 .trend-pulse-ring {

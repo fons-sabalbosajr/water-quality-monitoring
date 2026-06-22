@@ -127,6 +127,101 @@
   margin: 0 0 1.25rem;
 }
 
+/* ── Line chart merge panel ── */
+.linechart-merge-panel {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.lcm-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--bg-base);
+}
+
+.lcm-row strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.lcm-preview {
+  padding: 0.9rem 1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--bg-card);
+}
+
+.lcm-preview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.lcm-preview-head strong {
+  color: var(--text-primary);
+  font-size: 0.84rem;
+}
+
+.lcm-actions {
+  display: flex;
+  gap: 0.65rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* ── Year checkboxes / chips ── */
+.lcm-year-selector {
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--bg-base);
+}
+
+.lcm-year-selector strong {
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+
+.lcm-year-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.lcm-year-chip {
+  padding: 0.38rem 1rem;
+  border-radius: 0.55rem;
+  border: 1.5px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.lcm-year-chip.selected {
+  background: #446ACB;
+  border-color: #446ACB;
+  color: #fff;
+}
+
+.lcm-year-chip.always-on {
+  background: color-mix(in srgb, #7CB675 18%, var(--bg-base));
+  border-color: #7CB675;
+  color: #16a34a;
+  cursor: default;
+  font-weight: 700;
+}
+
 .section-note {
   font-size: 0.78rem;
   color: var(--text-secondary);
@@ -137,6 +232,51 @@
 .waterbody-settings-panel {
   display: grid;
   gap: 1rem;
+}
+
+/* ── Year selector bar in Waterbody Profiles & Station Locations ── */
+.wbs-year-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--bg-base);
+}
+
+.wbs-year-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.wbs-year-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.wbs-year-chip {
+  padding: 0.3rem 0.85rem;
+  border-radius: 0.5rem;
+  border: 1.5px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.wbs-year-chip.active {
+  background: #446ACB;
+  border-color: #446ACB;
+  color: #fff;
 }
 
 .settings-field {

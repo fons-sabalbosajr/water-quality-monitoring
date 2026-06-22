@@ -209,6 +209,31 @@ export const resetStoredWqmSheets = () => {
   window.dispatchEvent(new CustomEvent(WQM_DRAFTS_EVENT));
 };
 
+/**
+ * Read the locally cached (encrypted storage) sheets for any year.
+ * For 2026 this is the live draft; for 2024/2025 this is a locally-cached
+ * copy (fetched and stored after an import or a save).
+ */
+export const getYearSheetsLocal = (year) => {
+  if (year === DEFAULT_WQM_YEAR) return getStoredWqmSheets();
+  return encryptedStorage.getItem(`wqm_${year}_drafts`) || null;
+};
+
+/**
+ * Persist edited sheets for a specific year locally so ChartConfiguration and
+ * other multi-year views pick up the corrections immediately, without a page
+ * reload.  For 2026 the live draft store is updated.
+ */
+export const saveYearSheetsLocal = (year, sheets) => {
+  if (year === DEFAULT_WQM_YEAR) {
+    saveStoredWqmSheets(sheets);
+    return;
+  }
+  encryptedStorage.setItem(`wqm_${year}_drafts`, sheets);
+  // Fire the same draft event so any hook listening on multi-year data refreshes.
+  window.dispatchEvent(new CustomEvent(WQM_DRAFTS_EVENT));
+};
+
 export const getLocalPublishedWqmYear = () => normalizeWqmYear(encryptedStorage.getItem(WQM_PUBLISHED_YEAR_KEY));
 
 export const publishWqmYear = (nextYear) => {
@@ -295,6 +320,20 @@ export const usePublishedWqmDataset = () => {
   const [remoteSheets, setRemoteSheets] = useState([]);
   const [loading, setLoading] = useState(year !== DEFAULT_WQM_YEAR);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Re-read whenever any year's draft is saved or pushed so edits to past-year
+  // data (e.g. from Waterbody Profiles & Station Locations) propagate to every
+  // view — Dashboard, Visualizations, Waterbody Profiles, etc.
+  useEffect(() => {
+    const bump = () => setReloadKey((key) => key + 1);
+    window.addEventListener(WQM_DRAFTS_EVENT, bump);
+    window.addEventListener('storage', bump);
+    return () => {
+      window.removeEventListener(WQM_DRAFTS_EVENT, bump);
+      window.removeEventListener('storage', bump);
+    };
+  }, []);
 
   useEffect(() => {
     if (year === DEFAULT_WQM_YEAR) {
@@ -307,6 +346,21 @@ export const usePublishedWqmDataset = () => {
     }
 
     let cancelled = false;
+
+    // Prefer the locally-cached (possibly admin-edited) copy of the past year so
+    // corrections appear immediately across the app; fall back to the server.
+    const local = encryptedStorage.getItem(`wqm_${year}_drafts`);
+    if (Array.isArray(local) && local.length) {
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setRemoteSheets(local);
+          setLoading(false);
+          setError('');
+        }
+      });
+      return () => { cancelled = true; };
+    }
+
     queueMicrotask(() => {
       if (!cancelled) {
         setLoading(true);
@@ -315,7 +369,11 @@ export const usePublishedWqmDataset = () => {
     });
     api.get(`/water/wqm/${year}`)
       .then((response) => {
-        if (!cancelled) setRemoteSheets(response.data?.sheets || []);
+        if (!cancelled) {
+          const sheets = response.data?.sheets || [];
+          if (sheets.length) encryptedStorage.setItem(`wqm_${year}_drafts`, sheets);
+          setRemoteSheets(sheets);
+        }
       })
       .catch((requestError) => {
         if (!cancelled) {
@@ -328,7 +386,7 @@ export const usePublishedWqmDataset = () => {
       });
 
     return () => { cancelled = true; };
-  }, [year]);
+  }, [year, reloadKey]);
 
   return {
     year,
@@ -337,6 +395,81 @@ export const usePublishedWqmDataset = () => {
     error,
     setPublishedYear,
   };
+};
+
+/**
+ * Given a list of years, fetch/serve the sheets for each one and return them
+ * as a Map<year, sheets[]>.  2026 comes from encrypted local storage; 2024 and
+ * 2025 are fetched from the API (same path as usePublishedWqmDataset).
+ * The hook re-fetches whenever the years array reference changes.
+ */
+export const useAllYearSheets = (years) => {
+  const localSheets = useWqmSheets();
+  const [cache, setCache] = useState(() => new Map());
+  const [loading, setLoading] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const yearsKey = [...years].sort((a, b) => a - b).join(',');
+
+  // Re-read whenever any year's draft is saved/pushed so live edits to past-year
+  // data refresh Chart Configuration and the settings panel immediately.
+  useEffect(() => {
+    const bump = () => setReloadKey((key) => key + 1);
+    window.addEventListener(WQM_DRAFTS_EVENT, bump);
+    window.addEventListener('storage', bump);
+    return () => {
+      window.removeEventListener(WQM_DRAFTS_EVENT, bump);
+      window.removeEventListener('storage', bump);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const remoteYears = years.filter((y) => y !== DEFAULT_WQM_YEAR);
+    if (!remoteYears.length) {
+      setLoading(false);
+      return undefined;
+    }
+    setLoading(true);
+    Promise.all(
+      remoteYears.map((yr) => {
+        // If we already have a locally-cached copy (e.g. after a previous
+        // fetch or after the admin edits+saves that year), use it immediately
+        // without hitting the network.
+        const local = encryptedStorage.getItem(`wqm_${yr}_drafts`);
+        if (Array.isArray(local) && local.length) {
+          return Promise.resolve([yr, local]);
+        }
+        return api
+          .get(`/water/wqm/${yr}`)
+          .then((res) => {
+            const sheets = res.data?.sheets || [];
+            // Cache locally so future renders are instant.
+            if (sheets.length) encryptedStorage.setItem(`wqm_${yr}_drafts`, sheets);
+            return [yr, sheets];
+          })
+          .catch(() => [yr, []]);
+      }),
+    ).then((entries) => {
+      if (!cancelled) {
+        setCache((prev) => {
+          const next = new Map(prev);
+          entries.forEach(([yr, sheets]) => next.set(yr, sheets));
+          return next;
+        });
+        setLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [yearsKey, reloadKey]);
+
+  return useMemo(() => {
+    const map = new Map(cache);
+    if (years.includes(DEFAULT_WQM_YEAR)) map.set(DEFAULT_WQM_YEAR, localSheets);
+    return { map, loading };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cache, localSheets, loading, yearsKey]);
 };
 
 export const buildWaterbodyOptions = (sheets) => sheets
@@ -356,7 +489,10 @@ export const buildWaterbodyOptions = (sheets) => sheets
   })
   .filter((waterbody) => waterbody.stations.length)
   .sort((a, b) => (
-    a.groupIndex - b.groupIndex
+    // Province alphabetical first so the dropdowns always flow Aurora → Bataan →
+    // Bulacan → …; group/source order are kept as tiebreakers within a province.
+    (a.province || 'Other').localeCompare(b.province || 'Other')
+    || a.groupIndex - b.groupIndex
     || a.sortIndex - b.sortIndex
     || a.sourceIndex - b.sourceIndex
     || a.name.localeCompare(b.name)

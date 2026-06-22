@@ -8,7 +8,9 @@ const projectRoot = dirname(fileURLToPath(import.meta.url))
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, projectRoot, '')
-  const host = env.VITE_HOST || '10.14.77.183'
+  // Bind to all interfaces by default so the dev server keeps working even when
+  // the machine's LAN IP changes. Set VITE_HOST in .env only to pin a specific IP.
+  const host = env.VITE_HOST || true
 
   return {
     base: '/water-quality-monitoring/',

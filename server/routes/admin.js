@@ -34,7 +34,7 @@ router.patch('/users/:id/role', async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { role },
-      { new: true, select: '-password' }
+      { returnDocument: 'after', select: '-password' }
     );
     if (!user) return res.status(404).json({ message: 'User not found' });
     res.json(user);
@@ -56,7 +56,7 @@ router.patch('/users/:id/status', async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { status },
-      { new: true, select: '-password' }
+      { returnDocument: 'after', select: '-password' }
     );
     if (!user) return res.status(404).json({ message: 'User not found' });
     res.json(user);
@@ -95,7 +95,7 @@ router.patch('/users/:id', async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.params.id,
       updates,
-      { new: true, runValidators: true, select: '-password' }
+      { returnDocument: 'after', runValidators: true, select: '-password' }
     );
     if (!user) return res.status(404).json({ message: 'User not found' });
     res.json(user);
@@ -144,7 +144,7 @@ router.patch('/settings/visualization-year', async (req, res) => {
     const setting = await AppSetting.findOneAndUpdate(
       { key: PUBLISHED_WQM_YEAR_KEY },
       { key: PUBLISHED_WQM_YEAR_KEY, value: year, updatedBy: req.user._id },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
     );
     res.json({
       year: Number(setting.value),

@@ -1,0 +1,121 @@
+.chart-config {
+  display: grid;
+  gap: 1rem;
+}
+
+.cc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem 1rem;
+  align-items: flex-end;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-card);
+}
+
+.cc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.cc-field > span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.cc-years-tag {
+  align-self: flex-end;
+  height: fit-content;
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+.cc-help {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.cc-loading {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.cc-rows {
+  display: grid;
+  gap: 1rem;
+}
+
+.cc-row {
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--cc-accent, #446ACB);
+  border-radius: 0.75rem;
+  background: var(--bg-card);
+  padding: 0.85rem 1rem 1rem;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.cc-row:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.14);
+}
+
+.cc-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+
+.cc-row-head h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.cc-row-sub {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.cc-interpretation {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.55rem;
+  background: color-mix(in srgb, var(--cc-accent, #446ACB) 6%, var(--bg-base));
+  border-left: 3px solid var(--cc-accent, #446ACB);
+}
+
+.cc-detail-interp {
+  --cc-accent: #f59e0b;
+  margin-bottom: 1rem;
+}
+
+.cc-detail-table {
+  margin-top: 1rem;
+}
+
+@keyframes ccFcDotPulse {
+  0% { transform: scale(0.5); opacity: 0.7; }
+  70% { transform: scale(2); opacity: 0; }
+  100% { transform: scale(2); opacity: 0; }
+}
+
+.cc-fc-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ccFcDotPulse 1.6s ease-out infinite;
+}

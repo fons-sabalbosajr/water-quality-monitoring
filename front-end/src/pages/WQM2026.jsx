@@ -29,6 +29,10 @@ const clone = (value) => JSON.parse(JSON.stringify(value));
 const normalizeMonthly = (monthly = []) => Array.from({ length: 12 }, (_, index) => monthly[index] ?? null);
 const getYearDraftKey = (year) => `wqm_${year}_drafts`;
 
+// Sentinel "parameter" used to render the Date of Sampling row inside the
+// station parameter editor table.
+const DATE_ROW_KEY = '__date_of_sampling__';
+
 // 2026 (bundled active dataset) and any admin-created custom year are stored
 // entirely in encrypted local storage. Only the legacy 2024/2025 archives are
 // fetched from MongoDB.
@@ -58,6 +62,9 @@ const resetStoredSheetsForYear = (year) => {
 };
 
 const computeAnnualAverage = (monthly = []) => {
+  // Censored readings such as "<5" or ">100" are still counted in the annual
+  // average using their numeric portion (the detection/quantitation limit).
+  // toNumber() extracts that number, so values carrying a "<" sign are included.
   const values = normalizeMonthly(monthly).map(toNumber).filter((value) => value !== null);
   if (!values.length) return null;
   return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(4));
@@ -93,10 +100,12 @@ const getParamStorageKey = (station, displayParam) => (
   Object.keys(station.params || {}).find((key) => normalizeParamName(key) === normalizeParamName(displayParam)) || displayParam
 );
 
-const buildStationDraft = (station, params) => ({
+const buildStationDraft = (station, params, defaultClass = '') => ({
   stnNo: station?.stnNo ?? '',
   stnId: station?.stnId ?? '',
   address: station?.address ?? '',
+  classInfo: station?.classInfo ?? defaultClass ?? '',
+  samplingDates: normalizeMonthly(station?.samplingDates).map((value) => value ?? ''),
   params: Object.fromEntries(params.map((param) => {
     const data = station ? getParamData(station, param) : null;
     return [param, {
@@ -267,7 +276,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   const openStationModal = (mode, station = null) => {
     setModalMode(mode);
     setEditingStation(station);
-    setStationDraft(buildStationDraft(station, modalParams));
+    setStationDraft(buildStationDraft(station, modalParams, sheet?.classInfo || ''));
   };
 
   const closeModal = () => {
@@ -289,12 +298,24 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
     });
   };
 
+  const setDraftSamplingDate = (monthIndex, value) => {
+    setStationDraft((draft) => {
+      const next = clone(draft);
+      if (!Array.isArray(next.samplingDates)) next.samplingDates = normalizeMonthly([]);
+      next.samplingDates[monthIndex] = value;
+      return next;
+    });
+  };
+
   const saveStation = () => {
     if (!sheet || !stationDraft || !canEditYear) return;
     const normalizedStation = {
       stnNo: parseEditableValue(stationDraft.stnNo),
       stnId: String(stationDraft.stnId || '').trim(),
       address: String(stationDraft.address || '').trim(),
+      classInfo: String(stationDraft.classInfo || '').trim(),
+      samplingDates: normalizeMonthly(stationDraft.samplingDates)
+        .map((value) => (String(value ?? '').trim() || null)),
       params: Object.fromEntries(modalParams.map((param) => {
         const paramKey = editingStation ? getParamStorageKey(editingStation, param) : param;
         const draftParam = stationDraft.params[param] || { monthly: [], avg: '' };
@@ -510,7 +531,10 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   const classLabel = sheet?.classInfo?.match(/CLASS\s+(\S+)/)?.[1] || '';
   const visibleMonthIndices = useMemo(() => {
     if (!stationDraft) return MONTHS_SHORT.map((_, index) => index);
-    if (modalMode === 'add') return MONTHS_SHORT.map((_, index) => index);
+    // When adding or editing a station, expose all 12 months so previously
+    // blank months can be filled in. Only the read-only view collapses to the
+    // months that already have readings.
+    if (modalMode === 'add' || modalMode === 'edit') return MONTHS_SHORT.map((_, index) => index);
 
     return MONTHS_SHORT
       .map((_, index) => index)
@@ -524,13 +548,24 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
     {
       title: 'Parameter',
       dataIndex: 'param',
-      fixed: 'left',
-      width: 60,
-      render: (param) => (
-        <div className="wqm-param-text">
-          {getDisplayParamName(param)}
-        </div>
-      ),
+      // fixed: 'left',
+      width: 110,
+      render: (param) => {
+        if (param === DATE_ROW_KEY) {
+          return (
+            <div className="wqm-param-text">
+              <span className="wqm-param-name">Date of Sampling</span>
+            </div>
+          );
+        }
+        const standard = getWqgStandard(param);
+        return (
+          <div className="wqm-param-text">
+            <span className="wqm-param-name">{getDisplayParamName(param)}</span>
+            {standard && <Tag color="green" className="wqm-wqg-tag">WQG: {standard}</Tag>}
+          </div>
+        );
+      },
     },
     ...visibleMonthIndices.map((monthIndex) => ({
       key: `month-${monthIndex}`,
@@ -538,6 +573,18 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
       dataIndex: ['monthly', monthIndex],
       width: 100,
       render: (_, row) => {
+        if (row.param === DATE_ROW_KEY) {
+          const dateValue = stationDraft?.samplingDates?.[monthIndex] ?? '';
+          return (
+            <Input
+              size="small"
+              placeholder="YYYY-MM-DD"
+              value={dateValue}
+              disabled={isReadOnlyModal}
+              onChange={(event) => setDraftSamplingDate(monthIndex, event.target.value)}
+            />
+          );
+        }
         const isObservation = normalizeParamName(row.param) === OBSERVATION_PARAM;
         const value = stationDraft?.params[row.param]?.monthly?.[monthIndex] ?? '';
         return isObservation ? (
@@ -562,35 +609,24 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
     {
       title: 'Annual Avg',
       dataIndex: 'avg',
-      width: 96,
-      render: (_, row) => (
-        normalizeParamName(row.param) === OBSERVATION_PARAM
-          ? <span className="wqm-muted">-</span>
-          : <Input size="small" value={stationDraft?.params[row.param]?.avg ?? ''} />
-      ),
-    },
-    {
-      title: 'WQG Standard',
-      dataIndex: 'param',
-      key: 'wqg',
-      // fixed: 'right',
       width: 80,
-      render: (param) => {
-        const standard = getWqgStandard(param);
-        return standard ? (
-          <Tag color="green" className="wqm-wqg-tag">{standard}</Tag>
-        ) : (
-          <span className="wqm-muted">—</span>
-        );
+      render: (_, row) => {
+        if (row.param === DATE_ROW_KEY) return <span className="wqm-muted">-</span>;
+        return normalizeParamName(row.param) === OBSERVATION_PARAM
+          ? <span className="wqm-muted">-</span>
+          : <Input size="small" value={stationDraft?.params[row.param]?.avg ?? ''} />;
       },
     },
   ];
-  const modalParameterRows = modalParams.map((param) => ({
-    key: param,
-    param,
-    monthly: stationDraft?.params[param]?.monthly || [],
-    avg: stationDraft?.params[param]?.avg ?? '',
-  }));
+  const modalParameterRows = [
+    { key: DATE_ROW_KEY, param: DATE_ROW_KEY, monthly: [], avg: '' },
+    ...modalParams.map((param) => ({
+      key: param,
+      param,
+      monthly: stationDraft?.params[param]?.monthly || [],
+      avg: stationDraft?.params[param]?.avg ?? '',
+    })),
+  ];
 
   return (
     <div className="wqm2026 ant-wqm2026">
@@ -751,7 +787,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
         title={modalMode === 'add' ? 'Add Station' : modalMode === 'edit' ? 'Edit Station' : 'Station Details'}
         open={Boolean(modalMode)}
         onCancel={closeModal}
-        width="min(1500px, 96vw)"
+        width="min(1700px, 100vw)"
         rootClassName="wqm-station-modal-root"
         className="wqm-station-modal"
         destroyOnHidden
@@ -770,6 +806,10 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
               <label>
                 <span>Station ID</span>
                 <Input value={stationDraft.stnId} disabled={isReadOnlyModal} onChange={(event) => setDraftField('stnId', event.target.value)} />
+              </label>
+              <label>
+                <span>Class</span>
+                <Input value={stationDraft.classInfo} placeholder="e.g. C, SB" disabled={isReadOnlyModal} onChange={(event) => setDraftField('classInfo', event.target.value)} />
               </label>
               <label className="station-address-field">
                 <span>Address</span>
