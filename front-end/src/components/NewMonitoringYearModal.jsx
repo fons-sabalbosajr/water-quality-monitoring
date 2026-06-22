@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, Modal, Select, Space, Tag, Transfer, Typography } from 'antd';
 import { CalendarOutlined } from '@ant-design/icons';
 import {
@@ -49,6 +49,17 @@ const NewMonitoringYearModal = ({ open, onClose, sourceSheets, onCreated }) => {
     setTargetKeys([]);
     setError('');
   };
+
+  // When the modal opens, pre-select every waterbody so the new monitoring year
+  // mirrors the full standard 2026 template by default (the admin can still
+  // deselect any waterbody before creating).
+  useEffect(() => {
+    if (open) {
+      setTargetKeys(waterbodies.map((wb) => wb.key));
+      setError('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const handleClose = () => {
     reset();

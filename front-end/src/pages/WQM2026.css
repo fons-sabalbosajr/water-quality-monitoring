@@ -816,8 +816,11 @@
 
 .station-modal-grid {
   display: grid;
-  grid-template-columns: 96px minmax(170px, 0.6fr) minmax(300px, 1.4fr);
-  gap: 0.75rem;
+  /* Single row: Station No. smaller, then three balanced text fields with
+     Address taking the most space. */
+  grid-template-columns: 110px minmax(180px, 1fr) minmax(180px, 1fr) minmax(320px, 1.5fr);
+  gap: 0.6rem;
+  align-items: end;
 }
 
 .station-modal-grid label {
@@ -835,8 +838,23 @@
 
 .station-modal-grid .ant-input,
 .station-modal-grid .ant-input-disabled {
-  font-size: 0.94rem;
-  font-weight: 700;
+  width: 100%;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+/* Keep the four station header fields visually balanced. */
+.station-no-field {
+  min-width: 110px;
+}
+
+.station-id-field,
+.station-class-field {
+  min-width: 180px;
+}
+
+.station-address-field {
+  min-width: 320px;
 }
 
 .waterbody-modal-grid {
@@ -870,26 +888,47 @@
   overflow: hidden;
 }
 
+/* Make the station modal taller and responsive so the month grid can use more
+   vertical room without needing a horizontal scrollbar. */
+.wqm-station-modal-root .ant-modal {
+  max-width: calc(100vw - 24px);
+  top: 12px;
+  padding-bottom: 12px;
+}
+
+.wqm-station-modal-root .ant-modal-content {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 24px);
+}
+
+.wqm-station-modal-root .ant-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .parameter-editor-ant-table .ant-table {
   background: var(--bg-card);
   color: var(--text-primary);
   font-size: 0.68rem;
+  table-layout: fixed;
 }
 
 .parameter-editor-ant-table .ant-table-thead > tr > th {
   background: #253C78;
   color: #fff;
-  font-size: 0.64rem;
+  font-size: 0.58rem;
   font-weight: 600;
-  padding: 0.45rem 0.5rem;
+  padding: 0.38rem 0.28rem;
   text-align: center;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.15;
 }
 
 .parameter-editor-ant-table .ant-table-tbody > tr > td {
   background: var(--bg-card);
   border-bottom: 1px solid var(--border-subtle);
-  padding: 0.36rem;
+  padding: 0.28rem;
   vertical-align: top;
 }
 
@@ -899,16 +938,30 @@
 
 .parameter-editor-ant-table .ant-input,
 .parameter-editor-ant-table .ant-input-disabled {
-  min-width: 58px;
+  min-width: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  font-size: 0.84rem;
+  font-size: 0.76rem;
   font-weight: 500;
+}
+
+/* Date of Sampling cells: use a slightly smaller, lighter Ant Design input
+   so the MM/DD/YYYY values and placeholder fit comfortably in the month cells. */
+.parameter-editor-ant-table .wqm-sampling-date-picker .ant-picker-input > input,
+.parameter-editor-ant-table .wqm-sampling-date-picker.ant-picker .ant-picker-input > input {
+  font-size: 0.74rem;
+  font-weight: 400;
+}
+
+.parameter-editor-ant-table .wqm-sampling-date-picker .ant-picker-input > input::placeholder,
+.parameter-editor-ant-table .wqm-sampling-date-picker.ant-picker .ant-picker-input > input::placeholder {
+  font-size: 0.72rem;
+  font-weight: 400;
 }
 
 .parameter-editor-ant-table .parameter-observation-input,
 .parameter-editor-ant-table .parameter-observation-input.ant-input-disabled {
-  min-width: 100px;
+  min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: break-word;
@@ -917,6 +970,29 @@
   resize: vertical;
   font-size: 11px;
   font-weight: 400;
+}
+
+/* On narrower screens, scale the table down a bit instead of forcing a side-scroll. */
+@media (max-width: 1180px) {
+  .parameter-editor-ant-table {
+    zoom: 0.92;
+  }
+}
+
+@media (max-width: 980px) {
+  .parameter-editor-ant-table {
+    zoom: 0.82;
+  }
+
+  .wqm-station-modal-root .ant-modal {
+    top: 8px;
+  }
+}
+
+@media (max-width: 760px) {
+  .parameter-editor-ant-table {
+    zoom: 0.72;
+  }
 }
 
 [data-theme='dark'] .parameter-editor-ant-table .ant-table,

@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Input, Layout, Modal, Popconfirm, Space, Table, Tag } from 'antd';
+import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
+dayjs.extend(customParseFormat);
+import { Button, DatePicker, Input, Layout, Modal, Popconfirm, Space, Table, Tag } from 'antd';
 import {
   DownOutlined,
   DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, PlusOutlined,
@@ -18,7 +21,7 @@ import {
 } from '../utils/wqmData';
 import {
   INITIAL_SHEETS, WATERBODY_PROVINCE, getStoredWqmSheets,
-  resetStoredWqmSheets, saveStoredWqmSheets,
+  resetStoredWqmSheets, saveYearSheetsLocal,
   isCustomTabularYear, removeTabularYear,
 } from '../utils/wqmSheets';
 import './WQM2026.css';
@@ -43,14 +46,6 @@ const getStoredSheetsForYear = (year, fallback = INITIAL_SHEETS) => {
   const stored = encryptedStorage.getItem(getYearDraftKey(year));
   if (stored) return stored;
   return isCustomTabularYear(year) ? [] : clone(fallback);
-};
-
-const saveStoredSheetsForYear = (year, sheets) => {
-  if (year === 2026) {
-    saveStoredWqmSheets(sheets);
-    return;
-  }
-  encryptedStorage.setItem(getYearDraftKey(year), sheets);
 };
 
 const resetStoredSheetsForYear = (year) => {
@@ -259,11 +254,13 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   const updateSheets = (updater, successMessage, logDetails) => {
     setSheets((current) => {
       const next = updater(clone(current));
-      if (isLocalYear(year)) {
-        saveStoredSheetsForYear(year, next);
-        if (successMessage) setMessage(successMessage);
-      } else {
-        // Official save to MongoDB for 2024/2025
+      // Always cache the new data locally AND broadcast the draft event so every
+      // page (Dashboard, Visualizations, Waterbody Profiles, Public Dashboard)
+      // reflects the update immediately.
+      saveYearSheetsLocal(year, next);
+      if (successMessage) setMessage(successMessage);
+      // 2024/2025 are additionally persisted to MongoDB for durability.
+      if (!isLocalYear(year)) {
         api.put(`/water/wqm/${year}`, { sheets: next })
           .then(() => setMessage(successMessage || `WQM ${year} saved to MongoDB.`))
           .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`));
@@ -382,10 +379,9 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   const deleteWaterbody = () => {
     if (!sheet || !canEditYear) return;
     const next = sheets.filter((s) => s.key !== sheet.key);
-    if (isLocalYear(year)) {
-      saveStoredSheetsForYear(year, next);
-      setMessage(`"${sheet.name}" removed from the local WQM ${year} draft.`);
-    } else {
+    saveYearSheetsLocal(year, next);
+    setMessage(`"${sheet.name}" removed from the WQM ${year} dataset.`);
+    if (!isLocalYear(year)) {
       api.put(`/water/wqm/${year}`, { sheets: next })
         .then(() => setMessage(`"${sheet.name}" removed and WQM ${year} saved to MongoDB.`))
         .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`));
@@ -426,10 +422,9 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
       stations: [],
     };
     const next = [...sheets, newSheet];
-    if (isLocalYear(year)) {
-      saveStoredSheetsForYear(year, next);
-      setMessage(`"${newSheet.name}" added to WQM ${year} dataset.`);
-    } else {
+    saveYearSheetsLocal(year, next);
+    setMessage(`"${newSheet.name}" added to WQM ${year} dataset.`);
+    if (!isLocalYear(year)) {
       api.put(`/water/wqm/${year}`, { sheets: next })
         .then(() => setMessage(`"${newSheet.name}" added and WQM ${year} saved to MongoDB.`))
         .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`));
@@ -549,7 +544,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
       title: 'Parameter',
       dataIndex: 'param',
       // fixed: 'left',
-      width: 110,
+      width: 96,
       render: (param) => {
         if (param === DATE_ROW_KEY) {
           return (
@@ -571,17 +566,28 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
       key: `month-${monthIndex}`,
       title: periodLabels[monthIndex] || MONTHS_SHORT[monthIndex],
       dataIndex: ['monthly', monthIndex],
-      width: 100,
+      width: 62,
       render: (_, row) => {
         if (row.param === DATE_ROW_KEY) {
-          const dateValue = stationDraft?.samplingDates?.[monthIndex] ?? '';
+          const rawValue = stationDraft?.samplingDates?.[monthIndex] ?? '';
+          // Parse the stored MM/DD/YYYY string back to a dayjs object for the picker.
+          const dayjsValue = rawValue
+            ? (() => { const d = dayjs(rawValue, 'MM/DD/YYYY', true); return d.isValid() ? d : null; })()
+            : null;
           return (
-            <Input
+            <DatePicker
+              className="wqm-sampling-date-picker"
               size="small"
-              placeholder="YYYY-MM-DD"
-              value={dateValue}
+              format="MM/DD/YYYY"
+              placeholder="MM/DD/YYYY"
+              value={dayjsValue}
               disabled={isReadOnlyModal}
-              onChange={(event) => setDraftSamplingDate(monthIndex, event.target.value)}
+              allowClear
+              style={{ width: '100%' }}
+              getPopupContainer={(trigger) => trigger.closest('.ant-modal-body') || document.body}
+              onChange={(date) =>
+                setDraftSamplingDate(monthIndex, date ? date.format('MM/DD/YYYY') : '')
+              }
             />
           );
         }
@@ -609,7 +615,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
     {
       title: 'Annual Avg',
       dataIndex: 'avg',
-      width: 80,
+      width: 64,
       render: (_, row) => {
         if (row.param === DATE_ROW_KEY) return <span className="wqm-muted">-</span>;
         return normalizeParamName(row.param) === OBSERVATION_PARAM
@@ -787,7 +793,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
         title={modalMode === 'add' ? 'Add Station' : modalMode === 'edit' ? 'Edit Station' : 'Station Details'}
         open={Boolean(modalMode)}
         onCancel={closeModal}
-        width="min(1700px, 100vw)"
+        width="min(96vw, 1880px)"
         rootClassName="wqm-station-modal-root"
         className="wqm-station-modal"
         destroyOnHidden
@@ -799,15 +805,15 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
         {stationDraft && (
           <div className="station-modal-body">
             <div className="station-modal-grid">
-              <label>
+              <label className="station-no-field">
                 <span>Station No.</span>
                 <Input value={stationDraft.stnNo} disabled={isReadOnlyModal} onChange={(event) => setDraftField('stnNo', event.target.value)} />
               </label>
-              <label>
+              <label className="station-id-field">
                 <span>Station ID</span>
                 <Input value={stationDraft.stnId} disabled={isReadOnlyModal} onChange={(event) => setDraftField('stnId', event.target.value)} />
               </label>
-              <label>
+              <label className="station-class-field">
                 <span>Class</span>
                 <Input value={stationDraft.classInfo} placeholder="e.g. C, SB" disabled={isReadOnlyModal} onChange={(event) => setDraftField('classInfo', event.target.value)} />
               </label>
@@ -824,7 +830,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
               columns={modalParameterColumns}
               dataSource={modalParameterRows}
               pagination={false}
-              scroll={{ x: 1640, y: '58vh' }}
+              scroll={{ y: '70vh' }}
             />
           </div>
         )}

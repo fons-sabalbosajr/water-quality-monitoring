@@ -39,7 +39,9 @@ export const isCustomTabularYear = (year) =>
   getCustomTabularYears().includes(Number(year));
 
 // Build empty sheets (no readings) for a new monitoring year from a set of
-// existing waterbody sheets, preserving station structure & parameter columns.
+// existing waterbody sheets, preserving the exact 2026-template structure:
+// waterbody key/name/class, per-station identity (no., id, address, class),
+// the full parameter set (blank monthly + avg), and a blank Date-of-Sampling row.
 export const buildBlankYearSheets = (sourceSheets, selectedKeys) => {
   const keys = new Set(selectedKeys);
   return sourceSheets
@@ -48,11 +50,13 @@ export const buildBlankYearSheets = (sourceSheets, selectedKeys) => {
       key: sheet.key,
       name: sheet.name,
       classInfo: sheet.classInfo || '',
-      periodLabels: sheet.periodLabels,
+      ...(sheet.periodLabels ? { periodLabels: sheet.periodLabels } : {}),
       stations: getStations(sheet).map((station) => ({
         stnNo: station.stnNo,
         stnId: station.stnId,
-        address: station.address,
+        address: station.address || '',
+        classInfo: station.classInfo || '',
+        samplingDates: Array(12).fill(null),
         params: Object.fromEntries(
           Object.keys(station.params || {}).map((param) => [
             param,
