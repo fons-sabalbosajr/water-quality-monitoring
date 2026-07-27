@@ -5,7 +5,7 @@
 // admin coordinate/label overrides from the Waterbody Profiles settings, and
 // attaches the full station record so popups can show live monitoring metrics.
 
-import encryptedStorage from './encryptedStorage';
+import encryptedStorage from './encryptedStorage.js';
 
 export const WATERBODY_PROFILE_KEY = 'wqms_waterbody_profile_settings';
 export const WATERBODY_PROFILE_EVENT = 'wqms:waterbody-profile-settings';

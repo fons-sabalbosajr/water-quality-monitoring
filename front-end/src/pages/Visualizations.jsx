@@ -13,12 +13,11 @@ import {
 import { loadStationLocationsCached } from '../utils/stationWorkbook';
 import { buildWaterbodyOptions, getReadableStations, groupWaterbodyByProvince, usePublishedWqmDataset } from '../utils/wqmSheets';
 import { useForecastMonths } from '../utils/forecastSettings';
+import { useChartTheme } from '../utils/chartTheme';
 import encryptedStorage from '../utils/encryptedStorage';
 import './Visualizations.css';
 
 const COLORS = ['#446ACB', '#7CB675', '#e07b54', '#a78bfa', '#f59e0b', '#06b6d4', '#ec4899', '#84cc16'];
-const CHART_TICK = { fontSize: 10 };
-const LEGEND_STYLE = { fontSize: '0.68rem' };
 const FORECAST_INITIAL_CARD_LIMIT = 3;
 const CesiumStationMap = lazy(() => import('../components/CesiumStationMap'));
 
@@ -359,8 +358,12 @@ const VisualizationView = ({ type }) => {
   const [forecastStationKey, setForecastStationKey] = useState('');
   const [forecastExpandedKey, setForecastExpandedKey] = useState('');
   const [forecastEngine, setForecastEngine] = useState('prophet');
-  const [forecastDetail, setForecastDetail] = useState(null);
+  const [forecastDetailParam, setForecastDetailParam] = useState(null);
   const forecastMonths = useForecastMonths();
+  // Axis/grid/regression colours must flip with the theme — see chartTheme.js
+  // for why these cannot be CSS variables.
+  const chart = useChartTheme();
+  const CHART_TICK = chart.tick;
   const currentMonthIndex = useMemo(() => getCurrentMonthIndex(stations, params), [params, stations]);
   const periodLabel = selectedSheet?.periodLabels?.[currentMonthIndex] || MONTHS_SHORT[currentMonthIndex];
   const currentMonthLabel = currentMonthIndex >= 0 ? `${periodLabel} ${visualizationYear}` : 'latest available data';
@@ -596,6 +599,10 @@ const VisualizationView = ({ type }) => {
       })
       .filter((card) => card.observed.length);
   }, [activeForecastStation, visibleForecastParams, forecastEngine, forecastMonths]);
+  // The detail modal used to hold a *copy* of the card taken at click time, so
+  // it kept rendering the old horizon (and old engine) after either setting
+  // changed. Track the parameter instead and re-derive the live card.
+  const forecastDetail = forecastCards.find((card) => card.param === forecastDetailParam) || null;
   const hiddenForecastCount = Math.max(0, forecastParamCandidates.length - forecastCards.length);
   const activeForecastLabel = (FORECAST_ENGINES[forecastEngine] || FORECAST_ENGINES.prophet).tag;
 
@@ -782,10 +789,10 @@ const VisualizationView = ({ type }) => {
             <h3>Fecal Contamination Risk Timeline</h3>
             <ResponsiveContainer width="100%" height={310}>
               <AreaChart data={fecalTimeline}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
                 <XAxis dataKey="month" tick={CHART_TICK} />
                 <YAxis tick={CHART_TICK} />
-                <Tooltip />
+                <Tooltip {...chart.tooltip} />
                 {fecalStations.map((station, index) => (
                   <Area key={station.stnId} dataKey={station.stnId} stroke={COLORS[index % COLORS.length]} fill={COLORS[index % COLORS.length]} fillOpacity={0.12} connectNulls />
                 ))}
@@ -813,11 +820,11 @@ const VisualizationView = ({ type }) => {
           <h3>PO4, NO3-N, DO, and Temperature Indicators</h3>
           <ResponsiveContainer width="100%" height={360}>
             <BarChart data={trophicData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
               <XAxis dataKey="station" tick={CHART_TICK} />
               <YAxis tick={CHART_TICK} />
-              <Tooltip />
-              <Legend wrapperStyle={LEGEND_STYLE} />
+              <Tooltip {...chart.tooltip} />
+              <Legend wrapperStyle={chart.legend} />
               <Bar dataKey="PO4" fill="#446ACB" />
               <Bar dataKey="NO3" fill="#7CB675" />
               <Bar dataKey="DO" fill="#e07b54" />
@@ -833,11 +840,11 @@ const VisualizationView = ({ type }) => {
           <h3>Seasonal Decomposition Chart</h3>
           <ResponsiveContainer width="100%" height={350}>
             <BarChart data={seasonalData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
               <XAxis dataKey="season" tick={CHART_TICK} />
               <YAxis tick={CHART_TICK} />
-              <Tooltip />
-              <Legend wrapperStyle={LEGEND_STYLE} />
+              <Tooltip {...chart.tooltip} />
+              <Legend wrapperStyle={chart.legend} />
               <Bar dataKey="DO" fill="#446ACB" />
               <Bar dataKey="TSS" fill="#7CB675" />
               <Bar dataKey="Fecal" fill="#e07b54" />
@@ -852,11 +859,11 @@ const VisualizationView = ({ type }) => {
           <h3>Station Radar / Spider Chart</h3>
           <ResponsiveContainer width="100%" height={390}>
             <RadarChart data={radarData}>
-              <PolarGrid />
+              <PolarGrid stroke={chart.grid} />
               <PolarAngleAxis dataKey="param" tick={CHART_TICK} />
               <PolarRadiusAxis angle={30} domain={[0, 100]} tick={CHART_TICK} />
-              <Legend wrapperStyle={LEGEND_STYLE} />
-              <Tooltip />
+              <Legend wrapperStyle={chart.legend} />
+              <Tooltip {...chart.tooltip} />
               {radarStations.map((station, index) => (
                 <Radar key={station.stnId} name={station.stnId} dataKey={station.stnId} stroke={COLORS[index]} fill={COLORS[index]} fillOpacity={0.12} />
               ))}
@@ -874,12 +881,20 @@ const VisualizationView = ({ type }) => {
               <p>{set.note}</p>
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis type="number" dataKey="x" name={set.xParam} tick={CHART_TICK} />
-                  <YAxis type="number" dataKey="y" name={set.yParam} tick={CHART_TICK} />
-                  <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
+                  <XAxis type="number" dataKey="x" name={set.xParam} tick={CHART_TICK} stroke={chart.axis} />
+                  <YAxis type="number" dataKey="y" name={set.yParam} tick={CHART_TICK} stroke={chart.axis} />
+                  <Tooltip cursor={{ strokeDasharray: '3 3', stroke: chart.axis }} {...chart.tooltip} />
                   <Scatter data={set.points} fill={COLORS[setIndex]} />
-                  <Line data={set.regression} dataKey="regression" stroke="#101F43" strokeWidth={2} dot={false} isAnimationActive />
+                  {/* Was hard-coded #101F43 — invisible against the dark card. */}
+                  <Line
+                    data={set.regression}
+                    dataKey="regression"
+                    stroke={chart.line}
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive
+                  />
                 </ComposedChart>
               </ResponsiveContainer>
             </article>
@@ -938,11 +953,11 @@ const VisualizationView = ({ type }) => {
                   role="button"
                   tabIndex={0}
                   title="Click to open full forecast details"
-                  onClick={() => setForecastDetail(card)}
+                  onClick={() => setForecastDetailParam(card.param)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
-                      setForecastDetail(card);
+                      setForecastDetailParam(card.param);
                     }
                   }}
                   style={{ '--fc-accent': card.color }}
@@ -952,7 +967,7 @@ const VisualizationView = ({ type }) => {
                       <h4>{card.param}</h4>
                       <p>{activeForecastStation?.stnId} · {card.observed.length} months · +{forecastMonths}mo forecast</p>
                     </div>
-                    <Statistic value={fmt(card.diagnostics.latest)} valueStyle={{ color: card.color }} />
+                    <Statistic value={fmt(card.diagnostics.latest)} styles={{ content: { color: card.color } }} />
                   </div>
                   <div className="forecast-tech-grid compact">
                     <Card size="small">
@@ -976,10 +991,10 @@ const VisualizationView = ({ type }) => {
                           <stop offset="95%" stopColor={card.color} stopOpacity={0.02} />
                         </linearGradient>
                       </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                      <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} vertical={false} />
                       <XAxis dataKey="month" tick={CHART_TICK} tickLine={false} axisLine={false} />
                       <YAxis tick={CHART_TICK} tickLine={false} axisLine={false} width={42} />
-                      <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                      <Tooltip {...chart.tooltip} contentStyle={{ ...chart.tooltip.contentStyle, fontSize: 11 }} />
                       <Area dataKey="actual" name="Observed" stroke={card.color} strokeWidth={2} fill={`url(#fcObs-${card.param.replace(/\W/g, '')})`} isAnimationActive animationDuration={900} animationEasing="ease-out" connectNulls />
                       <Line dataKey="upper" name="Upper band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive animationDuration={900} animationBegin={300} animationEasing="ease-out" />
                       <Line dataKey="lower" name="Lower band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive animationDuration={900} animationBegin={300} animationEasing="ease-out" />
@@ -1004,11 +1019,11 @@ const VisualizationView = ({ type }) => {
       <Modal
         className="forecast-detail-modal"
         open={Boolean(forecastDetail)}
-        onCancel={() => setForecastDetail(null)}
+        onCancel={() => setForecastDetailParam(null)}
         width="min(920px, 96vw)"
         destroyOnHidden
         title={forecastDetail ? `${forecastDetail.param} · ${activeForecastStation?.stnId || ''}` : ''}
-        footer={<Button onClick={() => setForecastDetail(null)}>Close</Button>}
+        footer={<Button onClick={() => setForecastDetailParam(null)}>Close</Button>}
       >
         {forecastDetail && (
           <div className="forecast-detail-body">
@@ -1026,11 +1041,11 @@ const VisualizationView = ({ type }) => {
                     <stop offset="95%" stopColor={forecastDetail.color} stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} vertical={false} />
                 <XAxis dataKey="month" tick={CHART_TICK} />
                 <YAxis tick={CHART_TICK} width={48} />
-                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-                <Legend wrapperStyle={LEGEND_STYLE} />
+                <Tooltip {...chart.tooltip} />
+                <Legend wrapperStyle={chart.legend} />
                 <Area dataKey="actual" name="Observed" stroke={forecastDetail.color} strokeWidth={2} fill="url(#fcDetailObs)" connectNulls isAnimationActive animationDuration={900} animationEasing="ease-out" />
                 <Line dataKey="upper" name="Upper band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive animationDuration={900} animationBegin={250} animationEasing="ease-out" />
                 <Line dataKey="lower" name="Lower band" stroke="#f59e0b" strokeOpacity={0.4} strokeDasharray="2 3" dot={false} isAnimationActive animationDuration={900} animationBegin={250} animationEasing="ease-out" />

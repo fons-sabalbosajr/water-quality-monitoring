@@ -5,8 +5,8 @@ const appSettingSchema = new mongoose.Schema(
     key: {
       type: String,
       required: true,
+      // `unique` implies an index — declaring both duplicated it.
       unique: true,
-      index: true,
       trim: true,
     },
     value: {

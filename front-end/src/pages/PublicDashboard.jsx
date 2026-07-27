@@ -1,5 +1,6 @@
 import {
   lazy,
+  memo,
   Suspense,
   useCallback,
   useEffect,
@@ -7,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import {
   Alert,
   Badge,
@@ -64,7 +65,7 @@ import {
 } from "recharts";
 import embLogo from "../assets/emblogo.svg";
 import bagongPilipinasLogo from "../assets/bagongpilipinaslogo.png";
-import { useTheme } from "../context/ThemeContext";
+import { useTheme } from '../context/themeStore';
 import {
   MONTHS_SHORT,
   PARAM_LIMITS,
@@ -804,7 +805,7 @@ const DashboardView = ({
       ? `${MONTHS_SHORT[currentMonthIdx]} ${year}`
       : String(year);
 
-  /* ── Trend + 3-month forecast ── */
+  /* ── Trend + forecast (horizon from the Forecast Horizon setting) ── */
   const { trendDataWithForecast, lastObservedMonth } = useMemo(() => {
     if (!activeChartParam || !stations.length)
       return { trendDataWithForecast: [], lastObservedMonth: null };
@@ -1222,8 +1223,11 @@ const DashboardView = ({
                 <div className="pub-chart-forecast-note">
                   <ThunderboltOutlined style={{ color: FC_COLOR, fontSize: 12 }} />
                   <Text type="secondary" style={{ fontSize: 11 }}>
-                    <strong>Forecast (F1–F3):</strong> AI-assisted projection using a Prophet-style additive model.
-                    Dashed lines represent predicted values for the next 3 months based on historical trend and seasonality.
+                    {/* This label was hard-coded to "F1–F3" / "next 3 months", so it
+                        kept claiming a 3-month horizon after an admin changed the
+                        setting — the charts updated but the caption did not. */}
+                    <strong>Forecast (F1{forecastMonths > 1 ? `–F${forecastMonths}` : ''}):</strong> AI-assisted projection using a Prophet-style additive model.
+                    Dashed lines represent predicted values for the next {forecastMonths} month{forecastMonths > 1 ? 's' : ''} based on historical trend and seasonality.
                     The vertical marker ▶ separates observed data from the forecast zone.
                   </Text>
                 </div>
@@ -1996,7 +2000,7 @@ const TabularView = ({
                         type="secondary"
                         style={{ fontSize: 12, marginLeft: 6 }}
                       >
-                        AI Forecast Prophet additive model 3-month
+                        AI Forecast Prophet additive model {forecastMonths}-month
                         projection
                       </Text>
                     </div>
@@ -2070,6 +2074,9 @@ const TabularView = ({
       showForecastFor,
       allParamForecasts,
       stations.length,
+      // The rendered label reports the horizon, so this memo has to rebuild
+      // when the setting changes — otherwise the caption goes stale again.
+      forecastMonths,
     ],
   );
 
@@ -2488,6 +2495,44 @@ const ExportView = ({
 /* ─────────────────────────────────────
    FOOTER
 ───────────────────────────────────── */
+/**
+ * Isolated clock.
+ *
+ * The ticking timestamp used to live in PublicDashboard's own state, so a
+ * setState fired once per second at the very top of the tree. That re-rendered
+ * the entire dashboard — every Recharts surface, the Cesium wrapper, and all
+ * three tables — 60 times a minute, which is what drove the steadily climbing
+ * memory use and the sluggish UI on this page. Keeping the tick in a leaf
+ * component confines each update to these two spans.
+ */
+const HeaderClock = memo(() => {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    // Align to the next whole second, then tick, so the display never skips or
+    // repeats a second because of accumulated interval drift.
+    let intervalId;
+    const timeoutId = window.setTimeout(() => {
+      setNow(new Date());
+      intervalId = window.setInterval(() => setNow(new Date()), 1000);
+    }, 1000 - (Date.now() % 1000));
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (intervalId) window.clearInterval(intervalId);
+    };
+  }, []);
+
+  return (
+    <div className="pub-header-datetime" aria-live="off">
+      <span className="pub-header-datetime-label">Philippine Time</span>
+      <span className="pub-header-datetime-time">{HEADER_TIME_FORMATTER.format(now)}</span>
+      <span className="pub-header-datetime-date">{HEADER_DATE_FORMATTER.format(now)}</span>
+    </div>
+  );
+});
+HeaderClock.displayName = "HeaderClock";
+
 const PubFooter = ({ year }) => (
   <footer className="pub-footer">
     <div className="pub-footer-inner">
@@ -2529,10 +2574,12 @@ const PubFooter = ({ year }) => (
 const PublicDashboard = () => {
   const { theme, toggle } = useTheme();
   const isDark = theme === "dark";
-  const [currentDateTime, setCurrentDateTime] = useState(() => new Date());
   const [collapsed, setCollapsed] = useState(false);
   const [menuKey, setMenuKey] = useState("dashboard");
-  const { year, sheets, loading, error } = usePublishedWqmDataset();
+  // This route is unauthenticated: without isPublic the hook called the
+  // token-protected endpoints, so every public visit fired requests that 401'd
+  // and silently fell back to whatever year happened to be cached locally.
+  const { year, sheets, loading, error } = usePublishedWqmDataset({ isPublic: true });
   const waterbodyOptions = useMemo(
     () => buildWaterbodyOptions(sheets),
     [sheets],
@@ -2563,18 +2610,14 @@ const PublicDashboard = () => {
     };
   }, []);
 
-  useEffect(() => {
-    const intervalId = window.setInterval(() => setCurrentDateTime(new Date()), 1000);
-    return () => window.clearInterval(intervalId);
-  }, []);
-
-  const menuItems = [
+  const menuItems = useMemo(() => [
     { key: "dashboard", icon: <DashboardOutlined />, label: "Dashboard" },
     { key: "tabular", icon: <TableOutlined />, label: "Tabular Data" },
     { key: "export", icon: <DownloadOutlined />, label: "Export Data" },
-  ];
+  ], []);
 
-  const sharedProps = {
+  // A fresh object here means new props for every child view on each render.
+  const sharedProps = useMemo(() => ({
     sheets,
     waterbodyKey,
     setWaterbodyKey,
@@ -2582,7 +2625,7 @@ const PublicDashboard = () => {
     year,
     loading,
     error,
-  };
+  }), [sheets, waterbodyKey, waterbodyOptions, year, loading, error]);
 
   return (
     <Layout className={`pub-layout ${isDark ? "pub-dark" : "pub-light"}`}>
@@ -2601,11 +2644,7 @@ const PublicDashboard = () => {
         </div>
         <div className="pub-header-actions">
           {/* <span className="pub-header-badge">Public Dashboard {year}</span> */}
-          <div className="pub-header-datetime" aria-live="polite">
-            <span className="pub-header-datetime-label">Philippine Time</span>
-            <span className="pub-header-datetime-time">{HEADER_TIME_FORMATTER.format(currentDateTime)}</span>
-            <span className="pub-header-datetime-date">{HEADER_DATE_FORMATTER.format(currentDateTime)}</span>
-          </div>
+          <HeaderClock />
           <Button
             type="text"
             icon={isDark ? <SunOutlined /> : <MoonOutlined />}
@@ -2613,7 +2652,7 @@ const PublicDashboard = () => {
             className="pub-theme-btn"
             aria-label="Toggle theme"
           />
-          {/* <Link to="/login">
+          {/* <Link to="/admin">
             <Button type="primary" size="small">
               Staff Login
             </Button>

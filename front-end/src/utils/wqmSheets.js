@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import wqmData from '../data/wqm2026.json';
 import api from '../api/axios';
-import encryptedStorage from './encryptedStorage';
-import { getStations, hasNumericReading, toTitle } from './wqmData';
+import encryptedStorage from './encryptedStorage.js';
+import { getStations, hasNumericReading, toTitle } from './wqmData.js';
 
 export const WQM_DRAFTS_KEY = 'wqm_2026_drafts';
 export const WQM_DRAFTS_EVENT = 'wqm:drafts-updated';
@@ -97,7 +97,14 @@ export const removeTabularYear = (year) => {
 export const useTabularYears = () => {
   const [years, setYears] = useState(getAllTabularYears);
   useEffect(() => {
-    const refresh = () => setYears(getAllTabularYears());
+    // getAllTabularYears() builds a new array each call, so an unconditional
+    // setState here re-rendered the whole sidebar on every unrelated storage
+    // event. Compare contents and keep the existing reference when equal.
+    const refresh = () => setYears((current) => {
+      const next = getAllTabularYears();
+      const same = next.length === current.length && next.every((year, i) => year === current[i]);
+      return same ? current : next;
+    });
     window.addEventListener(CUSTOM_YEARS_EVENT, refresh);
     window.addEventListener('storage', refresh);
     return () => {
@@ -201,7 +208,18 @@ export const buildSheets = (source = wqmData) => Object.entries(source)
 
 export const INITIAL_SHEETS = buildSheets();
 
-export const getStoredWqmSheets = () => encryptedStorage.getItem(WQM_DRAFTS_KEY) || clone(INITIAL_SHEETS);
+// When no draft exists this used to return a fresh deep clone of the bundled
+// dataset on every call. Each call produced a new array identity, so every
+// consumer's useMemo/useEffect saw "changed data" and recomputed the whole
+// dashboard. Hold one clone and reuse it until a draft is written or reset.
+let bundledSheetsFallback = null;
+
+const getBundledFallback = () => {
+  if (!bundledSheetsFallback) bundledSheetsFallback = clone(INITIAL_SHEETS);
+  return bundledSheetsFallback;
+};
+
+export const getStoredWqmSheets = () => encryptedStorage.getItem(WQM_DRAFTS_KEY) || getBundledFallback();
 
 export const saveStoredWqmSheets = (sheets) => {
   encryptedStorage.setItem(WQM_DRAFTS_KEY, sheets);
@@ -210,6 +228,9 @@ export const saveStoredWqmSheets = (sheets) => {
 
 export const resetStoredWqmSheets = () => {
   encryptedStorage.removeItem(WQM_DRAFTS_KEY);
+  // Force a fresh clone so the reset actually restores pristine source data
+  // rather than handing back an object a previous editor may have touched.
+  bundledSheetsFallback = null;
   window.dispatchEvent(new CustomEvent(WQM_DRAFTS_EVENT));
 };
 
@@ -247,7 +268,19 @@ export const publishWqmYear = (nextYear) => {
   return year;
 };
 
-export const getReadableStations = (sheet) => getStations(sheet).filter(hasNumericReading);
+// Cached per sheet, like getStations(). buildWaterbodyOptions() calls this once
+// per waterbody on every invocation, and several views call it again per render.
+const readableStationsCache = new WeakMap();
+const EMPTY_READABLE = Object.freeze([]);
+
+export const getReadableStations = (sheet) => {
+  if (!sheet || typeof sheet !== 'object') return EMPTY_READABLE;
+  const cached = readableStationsCache.get(sheet);
+  if (cached) return cached;
+  const stations = getStations(sheet).filter(hasNumericReading);
+  readableStationsCache.set(sheet, stations);
+  return stations;
+};
 
 // All valid station records for a sheet, including newly added stations that do
 // not yet have any numeric readings. Used by the Waterbody Profiles editor so
@@ -271,59 +304,145 @@ export const useWqmSheets = () => {
   const [sheets, setSheets] = useState(getStoredWqmSheets);
 
   useEffect(() => {
-    const refresh = () => setSheets(getStoredWqmSheets());
+    // Bail out when the stored reference is unchanged. Profile-settings and
+    // cross-tab storage events fire for unrelated keys too; without this guard
+    // every one of them re-rendered every consumer of this hook.
+    const refresh = () => setSheets((current) => {
+      const next = getStoredWqmSheets();
+      return next === current ? current : next;
+    });
+    // A renamed waterbody must still propagate even though the sheets object is
+    // untouched, so this listener forces a new identity.
+    const forceRefresh = () => setSheets(() => {
+      const next = getStoredWqmSheets();
+      return Array.isArray(next) ? [...next] : next;
+    });
+
     window.addEventListener(WQM_DRAFTS_EVENT, refresh);
     window.addEventListener('storage', refresh);
-    // Refresh when a waterbody profile name/assignment changes so renamed
-    // waterbodies update everywhere immediately (new array reference forces
-    // dependent buildWaterbodyOptions() memos to recompute with the new name).
-    window.addEventListener('wqms:waterbody-profile-settings', refresh);
+    window.addEventListener('wqms:waterbody-profile-settings', forceRefresh);
     return () => {
       window.removeEventListener(WQM_DRAFTS_EVENT, refresh);
       window.removeEventListener('storage', refresh);
-      window.removeEventListener('wqms:waterbody-profile-settings', refresh);
+      window.removeEventListener('wqms:waterbody-profile-settings', forceRefresh);
     };
   }, []);
 
-  return useMemo(() => sheets, [sheets]);
+  return sheets;
 };
 
-export const usePublishedWqmYear = () => {
+// ── Shared published-year store ─────────────────────────────────────────────
+// Every component using usePublishedWqmDataset() previously fired its own
+// GET /water/visualization-year on mount. On the dashboard that is Home, the
+// dashboard view, Visualizations and the 3D map — four identical requests per
+// navigation. One module-level store fetches once, dedupes concurrent callers,
+// and pushes the result to every subscriber.
+const yearSubscribers = new Set();
+let yearFetchPromise = null;
+let yearFetchedAt = 0;
+const YEAR_TTL_MS = 5 * 60 * 1000;
+
+const notifyYearSubscribers = (year) => {
+  yearSubscribers.forEach((listener) => listener(year));
+};
+
+const fetchPublishedYear = (isPublic) => {
+  const fresh = Date.now() - yearFetchedAt < YEAR_TTL_MS;
+  if (yearFetchPromise || fresh) return yearFetchPromise || Promise.resolve(getLocalPublishedWqmYear());
+
+  const endpoint = isPublic ? '/water/public/visualization-year' : '/water/visualization-year';
+  yearFetchPromise = api.get(endpoint)
+    .then(({ data }) => {
+      yearFetchedAt = Date.now();
+      const year = publishWqmYear(data?.year);
+      notifyYearSubscribers(year);
+      return year;
+    })
+    .catch(() => getLocalPublishedWqmYear())
+    .finally(() => { yearFetchPromise = null; });
+
+  return yearFetchPromise;
+};
+
+/**
+ * @param {{ isPublic?: boolean }} options — pass isPublic on unauthenticated
+ * routes so the public endpoint is used instead of one that requires a token.
+ */
+export const usePublishedWqmYear = ({ isPublic = false } = {}) => {
   const [year, setYear] = useState(getLocalPublishedWqmYear);
 
   useEffect(() => {
     let mounted = true;
-    api.get('/water/visualization-year')
-      .then(({ data }) => {
-        if (mounted) setYear(publishWqmYear(data?.year));
-      })
-      .catch(() => {
-        if (mounted) setYear(getLocalPublishedWqmYear());
-      });
+    const listener = (next) => { if (mounted) setYear(next); };
+    yearSubscribers.add(listener);
+
+    fetchPublishedYear(isPublic).then((next) => {
+      if (mounted) setYear(next);
+    });
 
     const refresh = (event) => {
-      setYear(normalizeWqmYear(event.detail || encryptedStorage.getItem(WQM_PUBLISHED_YEAR_KEY)));
+      setYear(normalizeWqmYear(event?.detail || encryptedStorage.getItem(WQM_PUBLISHED_YEAR_KEY)));
     };
     window.addEventListener(WQM_PUBLISHED_YEAR_EVENT, refresh);
     window.addEventListener('storage', refresh);
     return () => {
       mounted = false;
+      yearSubscribers.delete(listener);
       window.removeEventListener(WQM_PUBLISHED_YEAR_EVENT, refresh);
       window.removeEventListener('storage', refresh);
     };
-  }, []);
+  }, [isPublic]);
 
-  const setPublishedYear = (nextYear) => setYear(publishWqmYear(nextYear));
+  const setPublishedYear = useCallback((nextYear) => {
+    const applied = publishWqmYear(nextYear);
+    yearFetchedAt = Date.now();
+    setYear(applied);
+    return applied;
+  }, []);
 
   return { year, setPublishedYear };
 };
 
-export const usePublishedWqmDataset = () => {
+// ── Shared archive-year fetcher ─────────────────────────────────────────────
+// Concurrent callers for the same year (dashboard + visualizations + settings
+// preview all mounting at once) previously each issued their own request for a
+// multi-MB payload. Dedupe by year for the lifetime of the in-flight request.
+const yearRequests = new Map();
+
+const fetchYearSheets = (year, isPublic = false) => {
+  const cached = encryptedStorage.getItem(`wqm_${year}_drafts`);
+  if (Array.isArray(cached) && cached.length) return Promise.resolve(cached);
+
+  const cacheKey = `${isPublic ? 'public' : 'auth'}:${year}`;
+  const inFlight = yearRequests.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const endpoint = isPublic ? `/water/public/wqm/${year}` : `/water/wqm/${year}`;
+  const request = api.get(endpoint)
+    .then((response) => {
+      const sheets = response.data?.sheets || [];
+      if (sheets.length) encryptedStorage.setItem(`wqm_${year}_drafts`, sheets);
+      return sheets;
+    })
+    .finally(() => { yearRequests.delete(cacheKey); });
+
+  yearRequests.set(cacheKey, request);
+  return request;
+};
+
+const EMPTY_SHEETS = Object.freeze([]);
+
+/**
+ * @param {{ isPublic?: boolean }} options
+ */
+export const usePublishedWqmDataset = ({ isPublic = false } = {}) => {
   const localSheets = useWqmSheets();
-  const { year, setPublishedYear } = usePublishedWqmYear();
-  const [remoteSheets, setRemoteSheets] = useState([]);
-  const [loading, setLoading] = useState(year !== DEFAULT_WQM_YEAR);
-  const [error, setError] = useState('');
+  const { year, setPublishedYear } = usePublishedWqmYear({ isPublic });
+  // Remote state is stored together with the year it belongs to. Keeping them
+  // in one object means switching years cannot momentarily pair the new year
+  // with the previous year's sheets, and lets the effect avoid resetting state
+  // synchronously just to clear stale data.
+  const [remote, setRemote] = useState({ year: null, sheets: EMPTY_SHEETS, error: '' });
   const [reloadKey, setReloadKey] = useState(0);
 
   // Re-read whenever any year's draft is saved or pushed so edits to past-year
@@ -340,65 +459,42 @@ export const usePublishedWqmDataset = () => {
   }, []);
 
   useEffect(() => {
-    if (year === DEFAULT_WQM_YEAR) {
-      queueMicrotask(() => {
-        setRemoteSheets([]);
-        setLoading(false);
-        setError('');
-      });
-      return undefined;
-    }
+    // 2026 is served entirely from local storage; there is nothing to fetch.
+    if (year === DEFAULT_WQM_YEAR) return undefined;
 
     let cancelled = false;
-
-    // Prefer the locally-cached (possibly admin-edited) copy of the past year so
-    // corrections appear immediately across the app; fall back to the server.
-    const local = encryptedStorage.getItem(`wqm_${year}_drafts`);
-    if (Array.isArray(local) && local.length) {
-      queueMicrotask(() => {
-        if (!cancelled) {
-          setRemoteSheets(local);
-          setLoading(false);
-          setError('');
-        }
-      });
-      return () => { cancelled = true; };
-    }
-
-    queueMicrotask(() => {
-      if (!cancelled) {
-        setLoading(true);
-        setError('');
-      }
-    });
-    api.get(`/water/wqm/${year}`)
-      .then((response) => {
-        if (!cancelled) {
-          const sheets = response.data?.sheets || [];
-          if (sheets.length) encryptedStorage.setItem(`wqm_${year}_drafts`, sheets);
-          setRemoteSheets(sheets);
-        }
+    fetchYearSheets(year, isPublic)
+      .then((sheets) => {
+        if (!cancelled) setRemote({ year, sheets: sheets.length ? sheets : EMPTY_SHEETS, error: '' });
       })
       .catch((requestError) => {
-        if (!cancelled) {
-          setRemoteSheets([]);
-          setError(requestError.response?.data?.message || `Unable to load WQM ${year} data.`);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        setRemote({
+          year,
+          sheets: EMPTY_SHEETS,
+          error: requestError.response?.data?.message || `Unable to load WQM ${year} data.`,
+        });
       });
 
     return () => { cancelled = true; };
-  }, [year, reloadKey]);
+  }, [year, reloadKey, isPublic]);
 
-  return {
-    year,
-    sheets: year === DEFAULT_WQM_YEAR ? localSheets : remoteSheets,
-    loading,
-    error,
-    setPublishedYear,
-  };
+  const isLocalYear = year === DEFAULT_WQM_YEAR;
+  const isResolved = isLocalYear || remote.year === year;
+  const sheets = isLocalYear ? localSheets : (isResolved ? remote.sheets : EMPTY_SHEETS);
+
+  // A new object literal on every render forced every consumer that spreads
+  // this result into props (the public dashboard does) to re-render.
+  return useMemo(
+    () => ({
+      year,
+      sheets,
+      loading: !isResolved,
+      error: isResolved && !isLocalYear ? remote.error : '',
+      setPublishedYear,
+    }),
+    [year, sheets, isResolved, isLocalYear, remote.error, setPublishedYear],
+  );
 };
 
 /**
@@ -410,10 +506,16 @@ export const usePublishedWqmDataset = () => {
 export const useAllYearSheets = (years) => {
   const localSheets = useWqmSheets();
   const [cache, setCache] = useState(() => new Map());
-  const [loading, setLoading] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
   const yearsKey = [...years].sort((a, b) => a - b).join(',');
+  const pendingYears = useMemo(
+    () => (yearsKey ? yearsKey.split(',').map(Number).filter((y) => y !== DEFAULT_WQM_YEAR) : []),
+    [yearsKey],
+  );
+  // Derived rather than stored: "loading" is simply "a requested archive year is
+  // not in the cache yet", which removes a setState-in-effect round trip.
+  const loading = pendingYears.some((yr) => !cache.has(yr));
 
   // Re-read whenever any year's draft is saved/pushed so live edits to past-year
   // data refresh Chart Configuration and the settings panel immediately.
@@ -428,52 +530,34 @@ export const useAllYearSheets = (years) => {
   }, []);
 
   useEffect(() => {
+    if (!pendingYears.length) return undefined;
     let cancelled = false;
-    const remoteYears = years.filter((y) => y !== DEFAULT_WQM_YEAR);
-    if (!remoteYears.length) {
-      setLoading(false);
-      return undefined;
-    }
-    setLoading(true);
+    // fetchYearSheets already serves the local cache and dedupes concurrent
+    // requests for the same year across every hook instance in the tree.
     Promise.all(
-      remoteYears.map((yr) => {
-        // If we already have a locally-cached copy (e.g. after a previous
-        // fetch or after the admin edits+saves that year), use it immediately
-        // without hitting the network.
-        const local = encryptedStorage.getItem(`wqm_${yr}_drafts`);
-        if (Array.isArray(local) && local.length) {
-          return Promise.resolve([yr, local]);
-        }
-        return api
-          .get(`/water/wqm/${yr}`)
-          .then((res) => {
-            const sheets = res.data?.sheets || [];
-            // Cache locally so future renders are instant.
-            if (sheets.length) encryptedStorage.setItem(`wqm_${yr}_drafts`, sheets);
-            return [yr, sheets];
-          })
-          .catch(() => [yr, []]);
-      }),
+      pendingYears.map((yr) => fetchYearSheets(yr).then((sheets) => [yr, sheets]).catch(() => [yr, EMPTY_SHEETS])),
     ).then((entries) => {
-      if (!cancelled) {
-        setCache((prev) => {
-          const next = new Map(prev);
-          entries.forEach(([yr, sheets]) => next.set(yr, sheets));
-          return next;
-        });
-        setLoading(false);
-      }
+      if (cancelled) return;
+      setCache((prev) => {
+        // Only replace the Map when something actually changed, so a repeated
+        // event does not hand every consumer a new identity for the same data.
+        const changed = entries.some(([yr, sheets]) => prev.get(yr) !== sheets);
+        if (!changed) return prev;
+        const next = new Map(prev);
+        entries.forEach(([yr, sheets]) => next.set(yr, sheets));
+        return next;
+      });
     });
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [yearsKey, reloadKey]);
+  }, [pendingYears, reloadKey]);
+
+  const includesDefault = yearsKey.split(',').includes(String(DEFAULT_WQM_YEAR));
 
   return useMemo(() => {
     const map = new Map(cache);
-    if (years.includes(DEFAULT_WQM_YEAR)) map.set(DEFAULT_WQM_YEAR, localSheets);
+    if (includesDefault) map.set(DEFAULT_WQM_YEAR, localSheets);
     return { map, loading };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cache, localSheets, loading, yearsKey]);
+  }, [cache, localSheets, loading, includesDefault]);
 };
 
 export const buildWaterbodyOptions = (sheets) => sheets

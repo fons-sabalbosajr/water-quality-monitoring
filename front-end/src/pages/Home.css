@@ -2,14 +2,18 @@
 .dashboard {
   display: flex;
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--bg-base);
-  font-family: 'Inter', system-ui, sans-serif;
+  /* Was its own shorter stack ('Inter', system-ui, sans-serif), which resolved
+     to a different face than index.css on Windows. Use the shared token. */
+  font-family: var(--app-font-family);
 }
 
 /* ── Sidebar ── */
 .sidebar {
   width: 240px;
   min-height: 100vh;
+  min-height: 100dvh;
   background: linear-gradient(180deg, #101F43 0%, #253C78 60%, #395BAF 100%);
   display: flex;
   flex-direction: column;
@@ -422,6 +426,7 @@
   flex: 1;
   padding: 1.75rem 2rem;
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--bg-base);
   transition: margin-left 0.22s ease;
 }
@@ -2888,5 +2893,66 @@ select.observation-month-filter {
 
   .osm-map {
     height: 240px;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Card sizing consistency
+   The dashboard's card grids relied on the grid default to keep cards the
+   same height, which breaks the moment a container sets align-items or a
+   card's content is wider than its column. These rules make the intent
+   explicit so a card with one extra line no longer stands taller than the
+   card beside it, and long unbroken values (station IDs, MPN counts) can no
+   longer push a card past its column.
+   ───────────────────────────────────────────────────────────────────────── */
+.stats-grid,
+.guide-grid,
+.gauge-grid,
+.dashboard-summary-strip {
+  align-items: stretch;
+}
+
+.stats-grid > *,
+.guide-grid > *,
+.gauge-grid > *,
+.dashboard-summary-strip > * {
+  min-width: 0;
+  height: 100%;
+}
+
+.stat-card,
+.guide-card,
+.gauge-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The metric text next to the icon must be allowed to shrink, otherwise the
+   flex row overflows the card instead of wrapping. */
+.stat-card > *:not(.stat-icon),
+.guide-card > *:not(.guide-icon) {
+  min-width: 0;
+}
+
+/* Charts inside cards: ResponsiveContainer measures its parent, and a parent
+   with min-width:auto can only ever grow, so the chart could never shrink back
+   down after the viewport narrowed. */
+.trend-chart-wrap,
+.chart-card,
+.dash-panel {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  /* Four summary tiles across is unreadable on a phone. */
+  .dashboard-summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 380px) {
+  .dashboard-summary-strip,
+  .gauge-grid {
+    grid-template-columns: 1fr;
   }
 }

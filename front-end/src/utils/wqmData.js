@@ -29,7 +29,14 @@ export const GAUGE_PARAMS = ['DO (mg/L)', 'TSS (mg/L)', 'pH', 'Temp. (°C)', 'NO
 export const toTitle = (str) =>
   String(str || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()).trim();
 
-export const normalizeParamName = (param) => {
+// normalizeParamName() sits in the hottest loop in the app: the correlation
+// matrix, gauges, trend builders and every table render call it once per
+// station × parameter × month. The inputs are drawn from a tiny fixed set of
+// spreadsheet column headings, so the result is memoised. This turns an
+// O(n) string scan into a Map hit on every call after the first.
+const paramNameCache = new Map();
+
+const computeParamName = (param) => {
   const raw = String(param || '').trim();
   const key = raw.toLowerCase().replace(/\s+/g, ' ');
 
@@ -50,6 +57,21 @@ export const normalizeParamName = (param) => {
   return raw;
 };
 
+export const normalizeParamName = (param) => {
+  // Non-string keys can never be repeated cheaply as a cache key; compute them
+  // directly rather than growing the Map with object identities.
+  if (typeof param !== 'string') return computeParamName(param);
+  if (paramNameCache.has(param)) return paramNameCache.get(param);
+  const normalized = computeParamName(param);
+  // Bound the cache: parameter headings are a closed set, so hitting this cap
+  // means something unexpected is feeding it and it should not grow forever.
+  if (paramNameCache.size < 500) paramNameCache.set(param, normalized);
+  return normalized;
+};
+
+// Shared empty result so "no stations" never produces a new array identity.
+const EMPTY_STATIONS = Object.freeze([]);
+
 export const isStationRecord = (station) => (
   station &&
   Number.isFinite(Number(station.stnNo)) &&
@@ -58,7 +80,19 @@ export const isStationRecord = (station) => (
   typeof station.params === 'object'
 );
 
-export const getStations = (sheet) => (sheet?.stations || []).filter(isStationRecord);
+// Cached per sheet object. Besides skipping a repeated filter pass, returning a
+// stable array reference lets downstream useMemo/React.memo comparisons hit,
+// instead of invalidating on every render because a fresh array was produced.
+const stationsCache = new WeakMap();
+
+export const getStations = (sheet) => {
+  if (!sheet || typeof sheet !== 'object') return EMPTY_STATIONS;
+  const cached = stationsCache.get(sheet);
+  if (cached) return cached;
+  const stations = (sheet.stations || []).filter(isStationRecord);
+  stationsCache.set(sheet, stations);
+  return stations;
+};
 
 export const toNumber = (value) => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -90,10 +124,43 @@ export const fmtWithUnit = (value, param) => {
   return unit && formatted !== '—' ? `${formatted} ${unit}` : formatted;
 };
 
+/**
+ * Per-station index of normalised parameter name -> reading block.
+ *
+ * getParamData() was a full Object.entries().find() with a normalisation call
+ * per key, executed on every access. Building the index once per station object
+ * and holding it in a WeakMap makes each lookup O(1) and lets the index be
+ * garbage collected together with the station it describes, so nothing leaks
+ * when sheets are replaced on a refresh.
+ */
+const stationParamIndex = new WeakMap();
+
+const getStationParamIndex = (station) => {
+  let index = stationParamIndex.get(station);
+  if (index) return index;
+
+  index = new Map();
+  for (const [key, value] of Object.entries(station.params || {})) {
+    const normalized = normalizeParamName(key);
+    // First writer wins, matching the previous .find() semantics when a sheet
+    // carries two headings that normalise to the same parameter.
+    if (normalized && !index.has(normalized)) index.set(normalized, value);
+  }
+  stationParamIndex.set(station, index);
+  return index;
+};
+
 export const getParamData = (station, displayParam) => {
+  if (!station || typeof station !== 'object') return null;
   const target = normalizeParamName(displayParam);
-  const entry = Object.entries(station?.params || {}).find(([key]) => normalizeParamName(key) === target);
-  return entry?.[1] || null;
+  if (!target) return null;
+  return getStationParamIndex(station).get(target) || null;
+};
+
+// Station objects are treated as immutable (every edit clones the sheet), but
+// call this if a station's params are ever mutated in place.
+export const invalidateStationParamIndex = (station) => {
+  if (station && typeof station === 'object') stationParamIndex.delete(station);
 };
 
 export const getAvailableParams = (stations, includeObservation = false) => {

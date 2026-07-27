@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAuth } from "../context/AuthContext";
-import { useTheme } from "../context/ThemeContext";
+import { useAuth } from '../context/authStore';
+import { useTheme } from '../context/themeStore';
 import {
   Alert,
   Avatar,
@@ -89,12 +89,21 @@ import {
   setLineChartMergeSettings,
   buildMultiYearTrend,
 } from "../utils/lineChartSettings";
-import { clearAppLogs, getAppLogs, logActivity } from "../utils/appLog";
 import {
-  getForecastMonths,
+  LOG_CATEGORIES,
+  clearAppLogs,
+  getAppLogs,
+  logActivity,
+} from "../utils/appLog";
+import {
+  useForecastMonths,
   setForecastMonths as setForecastMonthsSetting,
 } from "../utils/forecastSettings";
 import { confirmAction, toastSaved, alertError } from "../utils/swal";
+import { useTablePagination } from "../utils/tablePagination";
+import { mergeForecastEngines } from "../utils/forecastEngines";
+import { useChartTheme } from "../utils/chartTheme";
+import useReveal from "../utils/useReveal";
 import ChartConfiguration from "./ChartConfiguration";
 import "./Settings.css";
 
@@ -386,6 +395,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     : (histMap.get(activeYear) || []);
 
   // ── Main panel state ───────────────────────────────────────────────────
+  const { pagination: stationPagination } = useTablePagination("settings-stations");
   const waterbodies = useMemo(() => buildWaterbodyOptions(sheets), [sheets]);
   const [stationLocations, setStationLocations] = useState([]);
   const [settings, setSettings] = useState(() => {
@@ -875,8 +885,8 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
             size="middle"
             columns={stationColumns}
             dataSource={stationRows}
-            pagination={{ pageSize: 10, showSizeChanger: true }}
-            scroll={{ x: "max-content" }}
+            pagination={stationPagination}
+            scroll={{ x: 760 }}
             locale={{ emptyText: `No stations are available for this waterbody in WQM ${activeYear}.` }}
           />
         </>
@@ -985,7 +995,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
         okText="Save"
         onOk={saveStationEdit}
         width={700}
-        destroyOnClose
+        destroyOnHidden
       >
         {editStation && (
           <Form layout="vertical" style={{ marginTop: 8 }}>
@@ -1182,7 +1192,7 @@ const SystemInfo = ({ mode = "all" }) => {
             <Statistic
               title="Database"
               value={dbConnected ? "Connected" : "Offline"}
-              valueStyle={{ color: dbConnected ? "#16a34a" : "#dc2626" }}
+              styles={{ content: { color: dbConnected ? "#16a34a" : "#dc2626" } }}
               prefix={
                 <Badge status={dbConnected ? "success" : "error"} />
               }
@@ -1317,6 +1327,7 @@ const AccountsPanel = ({ currentUser }) => {
   const [userDraft, setUserDraft] = useState(null);
   const [userAccessDraft, setUserAccessDraft] = useState({});
   const [saving, setSaving] = useState(false);
+  const { pagination: usersPagination, onTotalChange } = useTablePagination("settings-users");
 
   useEffect(() => {
     let mounted = true;
@@ -1351,6 +1362,9 @@ const AccountsPanel = ({ currentUser }) => {
     () => users.filter((u) => (u.status || "approved") === "pending"),
     [users],
   );
+
+  // Searching or deleting can leave the table on a page past the end.
+  useEffect(() => { onTotalChange(filteredUsers.length); }, [filteredUsers.length, onTotalChange]);
 
   const changeStatus = async (user, status) => {
     try {
@@ -1420,24 +1434,28 @@ const AccountsPanel = ({ currentUser }) => {
 
   const updateUserAccess = (feature, value) => {
     if (!editingUser) return;
-    setUserAccessDraft((draft) => {
-      const nextDraft = { ...draft };
-      if (value === "default") delete nextDraft[feature];
-      else nextDraft[feature] = value;
-      const updated = { ...getUserAccessOverrides() };
-      if (Object.keys(nextDraft).length) updated[editingUser._id] = nextDraft;
-      else delete updated[editingUser._id];
-      encryptedStorage.setItem(USER_ACCESS_KEY, updated);
-      window.dispatchEvent(
-        new CustomEvent("wqms:access-settings", { detail: updated }),
-      );
-      logActivity(
-        "Updated user access override",
-        { user: editingUser.email, feature, value },
-        currentUser,
-      );
-      return nextDraft;
-    });
+    // Storage writes, the broadcast event and the activity log used to run
+    // inside the setState updater. React can invoke an updater more than once
+    // (StrictMode does so in development), which wrote the override twice and
+    // produced duplicate log entries. Compute first, then commit.
+    const nextDraft = { ...userAccessDraft };
+    if (value === "default") delete nextDraft[feature];
+    else nextDraft[feature] = value;
+
+    const updated = { ...getUserAccessOverrides() };
+    if (Object.keys(nextDraft).length) updated[editingUser._id] = nextDraft;
+    else delete updated[editingUser._id];
+
+    setUserAccessDraft(nextDraft);
+    encryptedStorage.setItem(USER_ACCESS_KEY, updated);
+    window.dispatchEvent(
+      new CustomEvent("wqms:access-settings", { detail: updated }),
+    );
+    logActivity(
+      "Updated user access override",
+      { user: editingUser.email, feature, value },
+      currentUser,
+    );
   };
 
   const saveUserDetails = async () => {
@@ -1667,8 +1685,8 @@ const AccountsPanel = ({ currentUser }) => {
         size="middle"
         columns={columns}
         dataSource={filteredUsers}
-        pagination={{ pageSize: 10, showSizeChanger: true }}
-        scroll={{ x: "max-content" }}
+        pagination={usersPagination}
+        scroll={{ x: 720 }}
         rowClassName={(record) =>
           record._id === currentUser._id ? "row-self" : ""
         }
@@ -1692,8 +1710,8 @@ const AccountsPanel = ({ currentUser }) => {
         okText="Save Changes"
         confirmLoading={saving}
         onOk={saveUserDetails}
-        width={620}
-        destroyOnClose
+        width={700}
+        destroyOnHidden
       >
         {userDraft && (
           <Form layout="vertical" style={{ marginTop: 8 }}>
@@ -1772,7 +1790,7 @@ const AccountsPanel = ({ currentUser }) => {
                     <div className="settings-access-toggle-label">
                       <span>{label}</span>
                       {!isOverridden && (
-                        <Tag bordered={false} color="default">
+                        <Tag variant="filled" color="default">
                           Default
                         </Tag>
                       )}
@@ -1892,17 +1910,23 @@ const LOG_ACTION_COLORS = {
   default: "blue",
 };
 
+const LOG_CATEGORY_META = {
+  auth: { color: "purple", label: "Auth" },
+  create: { color: "green", label: "Create" },
+  update: { color: "blue", label: "Update" },
+  delete: { color: "red", label: "Delete" },
+  export: { color: "cyan", label: "Export" },
+  navigate: { color: "default", label: "Navigate" },
+  system: { color: "default", label: "System" },
+};
+
 const LogsPanel = ({ user }) => {
-  const [logs, setLogs] = useState(getAppLogs());
-  const actionData = useMemo(() => {
-    const counts = logs.reduce((acc, log) => {
-      acc[log.action] = (acc[log.action] || 0) + 1;
-      return acc;
-    }, {});
-    return Object.entries(counts)
-      .slice(0, 6)
-      .map(([name, value]) => ({ name, value }));
-  }, [logs]);
+  const [logs, setLogs] = useState(getAppLogs);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("all");
+  const chart = useChartTheme();
+  const { pagination: logsPagination, onTotalChange } =
+    useTablePagination("settings-logs");
 
   useEffect(() => {
     const refresh = () => setLogs(getAppLogs());
@@ -1910,16 +1934,81 @@ const LogsPanel = ({ user }) => {
     return () => window.removeEventListener("wqms:log", refresh);
   }, []);
 
-  const exportLogs = () => {
-    const blob = new Blob([JSON.stringify(logs, null, 2)], {
-      type: "application/json",
+  const filteredLogs = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return logs.filter((log) => {
+      if (category !== "all" && log.category !== category) return false;
+      if (!term) return true;
+      return (
+        log.action?.toLowerCase().includes(term) ||
+        log.actor?.toLowerCase().includes(term) ||
+        JSON.stringify(log.details || {}).toLowerCase().includes(term)
+      );
     });
+  }, [logs, search, category]);
+
+  useEffect(() => {
+    onTotalChange(filteredLogs.length);
+  }, [filteredLogs.length, onTotalChange]);
+
+  // Chart the most frequent actions. The previous version took the first six
+  // keys in insertion order rather than the six most frequent, so the chart
+  // rarely showed what actually dominated the log.
+  const actionData = useMemo(() => {
+    const counts = new Map();
+    filteredLogs.forEach((log) => {
+      counts.set(log.action, (counts.get(log.action) || 0) + 1);
+    });
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name, value]) => ({
+        name: name.length > 22 ? `${name.slice(0, 21)}…` : name,
+        fullName: name,
+        value,
+      }));
+  }, [filteredLogs]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = {};
+    logs.forEach((log) => {
+      counts[log.category] = (counts[log.category] || 0) + 1;
+    });
+    return counts;
+  }, [logs]);
+
+  const downloadLogs = (content, extension, mime) => {
+    const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `wqms_app_logs_${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.download = `wqms_app_logs_${new Date().toISOString().slice(0, 10)}.${extension}`;
     anchor.click();
-    URL.revokeObjectURL(url);
+    // Revoking synchronously can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const exportLogs = () =>
+    downloadLogs(JSON.stringify(filteredLogs, null, 2), "json", "application/json");
+
+  // CSV is what reviewers paste into reports; JSON alone was awkward for that.
+  const exportLogsCsv = () => {
+    const headers = ["Time", "Actor", "Role", "Category", "Action", "Screen", "Details"];
+    const rows = filteredLogs.map((log) => [
+      log.at,
+      log.actor,
+      log.role,
+      log.category,
+      log.action,
+      log.path || "",
+      JSON.stringify(log.details || {}),
+    ]);
+    const csv = [headers, ...rows]
+      .map((row) =>
+        row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","),
+      )
+      .join("\n");
+    downloadLogs(csv, "csv", "text/csv");
   };
 
   const clearLogs = async () => {
@@ -1941,37 +2030,101 @@ const LogsPanel = ({ user }) => {
       title: "Time",
       dataIndex: "at",
       key: "at",
-      width: 180,
-      render: (value) => new Date(value).toLocaleString("en-PH"),
+      width: 148,
+      defaultSortOrder: "descend",
+      sorter: (a, b) => new Date(a.at) - new Date(b.at),
+      render: (value) => {
+        const date = new Date(value);
+        return (
+          <div className="log-time">
+            <span className="log-time-main">
+              {date.toLocaleTimeString("en-PH", {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })}
+            </span>
+            <span className="log-time-date">
+              {date.toLocaleDateString("en-PH", {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })}
+            </span>
+          </div>
+        );
+      },
     },
     {
       title: "Actor",
       dataIndex: "actor",
       key: "actor",
-      width: 200,
+      width: 176,
+      ellipsis: true,
       render: (actor, record) => (
-        <Space size={6}>
-          <span>{actor}</span>
-          <Tag bordered={false}>{record.role}</Tag>
-        </Space>
+        <div className="log-actor">
+          <span className="log-actor-name" title={actor}>
+            {record.actorName || actor}
+          </span>
+          <Tag variant="filled" className="log-role-tag">
+            {record.role}
+          </Tag>
+        </div>
       ),
+    },
+    {
+      title: "Category",
+      dataIndex: "category",
+      key: "category",
+      width: 104,
+      responsive: ["md"],
+      filters: LOG_CATEGORIES.map((key) => ({
+        text: LOG_CATEGORY_META[key].label,
+        value: key,
+      })),
+      onFilter: (value, record) => record.category === value,
+      render: (value) => {
+        const meta = LOG_CATEGORY_META[value] || LOG_CATEGORY_META.system;
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      },
     },
     {
       title: "Action",
       dataIndex: "action",
       key: "action",
-      width: 200,
-      render: (action) => (
-        <Tag color={LOG_ACTION_COLORS.default}>{action}</Tag>
+      minWidth: 170,
+      ellipsis: true,
+      render: (action, record) => (
+        <span
+          className={`log-action log-action-${record.severity || "info"}`}
+          title={action}
+        >
+          {action}
+        </span>
       ),
     },
     {
       title: "Details",
       dataIndex: "details",
       key: "details",
-      render: (details) => (
-        <code style={{ fontSize: 11 }}>{JSON.stringify(details || {})}</code>
-      ),
+      minWidth: 200,
+      ellipsis: true,
+      responsive: ["lg"],
+      render: (details) => {
+        const entries = Object.entries(details || {});
+        if (!entries.length) return <span className="log-empty">&mdash;</span>;
+        const text = entries
+          .map(
+            ([key, value]) =>
+              `${key}: ${typeof value === "object" ? JSON.stringify(value) : value}`,
+          )
+          .join(" · ");
+        return (
+          <span className="log-details" title={text}>
+            {text}
+          </span>
+        );
+      },
     },
   ];
 
@@ -1979,21 +2132,32 @@ const LogsPanel = ({ user }) => {
     <Space orientation="vertical" size="large" style={{ width: "100%" }}>
       <Card
         variant="borderless"
+        className="logs-card"
         title={
-          <Space>
+          <Space wrap>
             <FileTextOutlined />
             <span>Activity Log</span>
             <Tag color="blue">{logs.length} records</Tag>
+            {filteredLogs.length !== logs.length && (
+              <Tag color="gold">{filteredLogs.length} shown</Tag>
+            )}
           </Space>
         }
         extra={
-          <Space>
+          <Space wrap>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={exportLogsCsv}
+              disabled={!filteredLogs.length}
+            >
+              CSV
+            </Button>
             <Button
               icon={<DownloadOutlined />}
               onClick={exportLogs}
-              disabled={!logs.length}
+              disabled={!filteredLogs.length}
             >
-              Export
+              JSON
             </Button>
             <Button
               danger
@@ -2006,26 +2170,74 @@ const LogsPanel = ({ user }) => {
           </Space>
         }
       >
+        <div className="logs-toolbar">
+          <Input.Search
+            allowClear
+            placeholder="Search action, actor, or details"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="logs-search"
+          />
+          <Select
+            value={category}
+            onChange={setCategory}
+            className="logs-category-filter"
+            options={[
+              { value: "all", label: `All categories (${logs.length})` },
+              ...LOG_CATEGORIES.filter((key) => categoryCounts[key]).map((key) => ({
+                value: key,
+                label: `${LOG_CATEGORY_META[key].label} (${categoryCounts[key]})`,
+              })),
+            ]}
+          />
+        </div>
+
         {actionData.length > 0 && (
-          <ResponsiveContainer width="100%" height={160}>
-            <BarChart data={actionData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-              <RechartsTooltip />
-              <Bar dataKey="value" fill="#446ACB" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <div className="logs-chart">
+            <ResponsiveContainer width="100%" height={150}>
+              <BarChart
+                data={actionData}
+                margin={{ top: 4, right: 8, left: -22, bottom: 0 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke={chart.grid}
+                  vertical={false}
+                />
+                <XAxis dataKey="name" tick={chart.tick} interval={0} />
+                <YAxis allowDecimals={false} tick={chart.tick} />
+                <RechartsTooltip
+                  {...chart.tooltip}
+                  formatter={(value, _name, item) => [
+                    value,
+                    item?.payload?.fullName || "Count",
+                  ]}
+                />
+                <Bar
+                  dataKey="value"
+                  fill="#446ACB"
+                  radius={[6, 6, 0, 0]}
+                  maxBarSize={48}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         )}
+
         <Table
           rowKey="id"
           size="small"
-          style={{ marginTop: 12 }}
+          className="logs-table"
           columns={columns}
-          dataSource={logs}
-          scroll={{ x: "max-content" }}
-          pagination={{ pageSize: 10, showSizeChanger: true }}
-          locale={{ emptyText: "No app activities have been logged yet." }}
+          dataSource={filteredLogs}
+          scroll={{ x: 640 }}
+          pagination={logsPagination}
+          rowClassName={(record) => `log-row log-row-${record.severity || "info"}`}
+          locale={{
+            emptyText: logs.length
+              ? "No activities match the current filter."
+              : "No app activities have been logged yet.",
+          }}
         />
       </Card>
     </Space>
@@ -2153,15 +2365,19 @@ const BackupPanel = ({ user }) => {
 };
 
 const AiForecastPanel = () => {
-  const [forecastMonths, setForecastMonths] = useState(getForecastMonths);
+  // Subscribed rather than a one-time snapshot, so the control reflects a change
+  // made in another tab (or elsewhere in the app) instead of drifting out of
+  // sync with what the forecast views are actually using.
+  const forecastMonths = useForecastMonths();
   const [savedMonths, setSavedMonths] = useState(false);
   const [localEngineStatus, setLocalEngineStatus] = useState(null);
   const [checkingEngines, setCheckingEngines] = useState(false);
   const [engineMessage, setEngineMessage] = useState("");
 
   const saveForecastMonths = (val) => {
+    // Writing through the shared setter dispatches the sync event, which is what
+    // updates `forecastMonths` here and in every forecast view at once.
     const clamped = setForecastMonthsSetting(val);
-    setForecastMonths(clamped);
     setSavedMonths(true);
     setTimeout(() => setSavedMonths(false), 2200);
     toastSaved(`Forecast horizon set to ${clamped} month${clamped > 1 ? "s" : ""}.`);
@@ -2176,8 +2392,18 @@ const AiForecastPanel = () => {
         setLocalEngineStatus(data);
       })
       .catch((err) => {
+        // A cancelled request (navigation, unmount) is not a failure worth
+        // reporting — it used to surface as "Cannot reach the server".
+        if (err.isCanceled) return;
+        // The local engines run entirely in the browser, so a failed status
+        // request does NOT mean they are unavailable — it only means the
+        // server-side AI forecast status is unknown. Say exactly that instead
+        // of surfacing a raw connection error next to working engines.
         setEngineMessage(
-          err.response?.data?.message || "Unable to reach forecast service.",
+          err.response?.status === 0
+            ? "Server status unavailable — local in-browser forecasting is unaffected and still running."
+            : err.response?.data?.message ||
+                "Could not read the server forecast status. Local engines are unaffected.",
         );
         setLocalEngineStatus(null);
       })
@@ -2188,7 +2414,9 @@ const AiForecastPanel = () => {
     queueMicrotask(checkLocalEngines);
   }, [checkLocalEngines]);
 
-  const localEngines = localEngineStatus?.localEngines || [];
+  // Always start from the built-in list so the panel is correct offline; the
+  // server response only enriches it.
+  const localEngines = mergeForecastEngines(localEngineStatus?.localEngines);
 
   const horizonOptions = [
     {
@@ -2343,7 +2571,9 @@ const AiForecastPanel = () => {
         </Row>
         {engineMessage && (
           <Alert
-            type="warning"
+            /* Informational, not a warning: the engines listed above are
+               running locally regardless of what the server said. */
+            type="info"
             showIcon
             title={engineMessage}
             style={{ marginTop: 10 }}
@@ -2729,6 +2959,17 @@ const Settings = ({ initialSection = "accounts" }) => {
   const { theme, toggle } = useTheme();
   const active = initialSection;
 
+  // Staggered entrance for the admin panels. Same one-shot, compositor-only
+  // reveal used by the landing page — it unobserves each section after it
+  // animates, so nothing stays subscribed while an admin works on the page.
+  // `active` is part of the key so switching sections re-runs the reveal.
+  const adminRevealRef = useReveal({
+    selector: ".settings-section",
+    distance: 14,
+    duration: 420,
+    delayStep: 45,
+  });
+
   if (!["admin", "developer"].includes(user?.role)) {
     return (
       <div className="settings-denied">
@@ -2740,7 +2981,7 @@ const Settings = ({ initialSection = "accounts" }) => {
   }
 
   return (
-    <div className="settings-page">
+    <div className="settings-page" ref={adminRevealRef}>
       {/* <div className="settings-header">
         <div>
           <h2 className="settings-title">Developer Manager</h2>

@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router';
 import api from '../api/axios';
 import bagongLogo from '../assets/bagongpilipinaslogo.png';
 import embLogo from '../assets/emblogo.svg';
+import AuthThemeToggle from '../components/AuthThemeToggle';
 import './Login.css';
 
 const ResetPassword = () => {
@@ -30,7 +31,7 @@ const ResetPassword = () => {
     setLoading(true);
     try {
       await api.post(`/auth/reset-password/${token}`, { password: form.password });
-      navigate('/login', { state: { notice: 'Password reset successful. Please sign in.' } });
+      navigate('/admin', { state: { notice: 'Password reset successful. Please sign in.' } });
     } catch (err) {
       setError(err.response?.data?.message || 'Reset failed. The link may have expired.');
     } finally {
@@ -43,6 +44,7 @@ const ResetPassword = () => {
       <div className="login-bg" aria-hidden="true" />
 
       <div className="login-card">
+        <AuthThemeToggle />
         <div className="login-brand">
           <div className="brand-logos">
             <img src={bagongLogo} alt="Bagong Pilipinas" />
@@ -96,7 +98,7 @@ const ResetPassword = () => {
         </form>
 
         <p className="login-footer" style={{ marginTop: '1.25rem' }}>
-          <Link to="/login">← Back to Sign In</Link>
+          <Link to="/admin">← Back to Sign In</Link>
         </p>
       </div>
     </div>

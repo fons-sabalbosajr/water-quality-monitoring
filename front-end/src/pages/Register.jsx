@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useNavigate, Link } from 'react-router';
+import { useAuth } from '../context/authStore';
 import bagongLogo from '../assets/bagongpilipinaslogo.png';
 import embLogo from '../assets/emblogo.svg';
+import AuthThemeToggle from '../components/AuthThemeToggle';
 import './Login.css'; // reuse login styles
 
 const Register = () => {
@@ -45,6 +46,7 @@ const Register = () => {
     <div className="login-wrapper">
       <div className="login-bg" aria-hidden="true" />
       <div className="login-card">
+        <AuthThemeToggle />
         <div className="login-brand">
           <div className="brand-logos">
             <img src={bagongLogo} alt="Bagong Pilipinas" />
@@ -119,7 +121,7 @@ const Register = () => {
 
         <p className="login-footer">
           Already have an account?{' '}
-          <Link to="/login">Sign in</Link>
+          <Link to="/admin">Sign in</Link>
         </p>
       </div>
     </div>

@@ -306,6 +306,29 @@ const getStatusLabel = (status) => ({
   nodata: 'No latest readings',
 }[status] || 'No latest readings');
 
+// OSM Buildings is a global 3D tileset — by far the heaviest thing this map can
+// load. Cesium's defaults cache ~512MB of tiles and render to sub-pixel
+// accuracy; both are wildly over-budget for an embedded station map.
+const applyTilesetMemoryBudget = (tileset) => {
+  if (!tileset) return tileset;
+  try {
+    tileset.maximumScreenSpaceError = 24;
+    // cacheBytes/maximumCacheOverflowBytes replaced maximumMemoryUsage in newer
+    // Cesium; set whichever this build exposes.
+    if ('cacheBytes' in tileset) {
+      tileset.cacheBytes = 48 * 1024 * 1024;
+      tileset.maximumCacheOverflowBytes = 16 * 1024 * 1024;
+    } else if ('maximumMemoryUsage' in tileset) {
+      tileset.maximumMemoryUsage = 48;
+    }
+    tileset.skipLevelOfDetail = true;
+    tileset.preloadWhenHidden = false;
+  } catch {
+    // Property names differ across Cesium versions; a missing one is harmless.
+  }
+  return tileset;
+};
+
 const safeDestroyViewer = (viewer, mountNode) => {
   if (!viewer) return;
   try {
@@ -391,6 +414,57 @@ const CesiumStationMap = ({
   useEffect(() => {
     onRenderErrorRef.current = onRenderError;
   }, [onRenderError]);
+
+  // `birdseye` only changes the camera pitch (25° vs 20°). It used to sit in
+  // the viewer-creation dependency array, so toggling it tore down and rebuilt
+  // the entire WebGL context — the most expensive thing this component can do,
+  // and a reliable way to accumulate GPU memory (browsers cap live WebGL
+  // contexts and reclaim them lazily). Read it from a ref instead.
+  const birdseyeRef = useRef(birdseye);
+  useEffect(() => {
+    birdseyeRef.current = birdseye;
+  }, [birdseye]);
+
+  // Stop the render loop while the tab is hidden or the map is scrolled out of
+  // view. Even with requestRenderMode the viewer keeps servicing tile requests
+  // and animation callbacks (the station pulse markers use CallbackProperty,
+  // which forces a redraw every frame), so a backgrounded dashboard kept a GPU
+  // context busy and kept pulling imagery it would never show.
+  useEffect(() => {
+    const mountNode = mountRef.current;
+    if (!mountNode) return undefined;
+
+    let visibleInViewport = true;
+    const applyRenderState = () => {
+      const viewer = viewerRef.current;
+      if (!viewer || viewer.isDestroyed()) return;
+      const shouldRender = visibleInViewport && document.visibilityState !== 'hidden';
+      if (viewer.useDefaultRenderLoop !== shouldRender) {
+        viewer.useDefaultRenderLoop = shouldRender;
+        if (shouldRender) viewer.scene.requestRender();
+      }
+    };
+
+    const handleVisibility = () => applyRenderState();
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    let observer;
+    if (typeof IntersectionObserver !== 'undefined') {
+      observer = new IntersectionObserver(
+        ([entry]) => {
+          visibleInViewport = entry.isIntersecting;
+          applyRenderState();
+        },
+        { threshold: 0.01 },
+      );
+      observer.observe(mountNode);
+    }
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      observer?.disconnect();
+    };
+  }, [hasRenderableLocations]);
 
   useEffect(() => {
     const mountNode = mountRef.current;
@@ -486,6 +560,30 @@ const CesiumStationMap = ({
     viewer.scene.globe.depthTestAgainstTerrain = false;
     viewer.scene.globe.baseColor = Color.fromCssColorString('#10233f');
     viewer.scene.skyAtmosphere.show = true;
+
+    // ── Memory budget ────────────────────────────────────────────────────────
+    // Cesium's defaults are tuned for a full-screen globe viewer, not an
+    // embedded panel showing a handful of stations in one province. Left alone
+    // they are the dominant source of this component's memory use.
+    //
+    // tileCacheSize defaults to 100 *decoded* imagery/terrain tiles, each of
+    // which can be megabytes once uploaded to the GPU; the cache is never
+    // trimmed while the viewer lives, so panning around steadily grows it.
+    viewer.scene.globe.tileCacheSize = isCompactViewport() ? 15 : 30;
+    // maximumScreenSpaceError defaults to 2 (near-pixel-perfect). Relaxing it
+    // roughly quarters the number of tiles fetched and retained at a given
+    // camera height, with no visible difference at station-overview zoom.
+    viewer.scene.globe.maximumScreenSpaceError = isCompactViewport() ? 6 : 4;
+    // Preloading ancestors/siblings keeps extra tile levels resident purely to
+    // smooth zooming — not worth the memory here.
+    viewer.scene.globe.preloadAncestors = false;
+    viewer.scene.globe.preloadSiblings = false;
+    // Skip decoding imagery for parts of the globe that are never shown.
+    viewer.scene.globe.showGroundAtmosphere = false;
+    viewer.scene.fog.enabled = false;
+    // Cap device pixel ratio: on a 3x phone screen the framebuffer is 9x the
+    // pixels, which dominates GPU memory for no perceptible gain here.
+    viewer.resolutionScale = Math.min(window.devicePixelRatio || 1, 1.5) / (window.devicePixelRatio || 1);
     viewer.scene.backgroundColor = Color.fromCssColorString('#07111f');
     viewer.scene.screenSpaceCameraController.minimumZoomDistance = 80;
     viewer.scene.screenSpaceCameraController.maximumZoomDistance = 8000000;
@@ -504,11 +602,11 @@ const CesiumStationMap = ({
     const markCameraMoving = () => { cameraMovingRef.current = true; };
     const markCameraStable = () => { cameraMovingRef.current = false; };
 
-    const refocusStations = () => focusStationBounds(viewer, latestLocationsRef.current, 0.4, birdseye);
+    const refocusStations = () => focusStationBounds(viewer, latestLocationsRef.current, 0.4, birdseyeRef.current);
     const refocusHome = (event) => {
       if (!latestLocationsRef.current.length) return;
       event.cancel = true;
-      focusStationBounds(viewer, latestLocationsRef.current, 0.45, birdseye);
+      focusStationBounds(viewer, latestLocationsRef.current, 0.45, birdseyeRef.current);
     };
     const handleMapClick = (movement) => {
       const picked = viewer.scene.pick(movement.position);
@@ -537,7 +635,7 @@ const CesiumStationMap = ({
           if (!disposed && !viewer.isDestroyed()) {
             viewer.terrainProvider = terrainProvider;
             setTerrainEnabled(true);
-            focusStationBounds(viewer, latestLocationsRef.current, 0.45, birdseye);
+            focusStationBounds(viewer, latestLocationsRef.current, 0.45, birdseyeRef.current);
           }
         })
         .catch(() => {
@@ -557,7 +655,7 @@ const CesiumStationMap = ({
       createOsmBuildingsAsync()
         .then((buildings) => {
           if (!disposed && !viewer.isDestroyed()) {
-            buildingsRef.current = viewer.scene.primitives.add(buildings);
+            buildingsRef.current = viewer.scene.primitives.add(applyTilesetMemoryBudget(buildings));
             setBuildingsEnabled(true);
           }
         })
@@ -600,7 +698,9 @@ const CesiumStationMap = ({
       imageryLayerRef.current = null;
       safeDestroyViewer(viewer, mountNode);
     };
-  }, [birdseye, canUseIon, defaultBuildingsEnabled, defaultTerrainEnabled, hasRenderableLocations]);
+    // birdseye deliberately excluded — it is read from birdseyeRef so a pitch
+    // change does not recreate the WebGL context.
+  }, [canUseIon, defaultBuildingsEnabled, defaultTerrainEnabled, hasRenderableLocations]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -833,7 +933,7 @@ const CesiumStationMap = ({
 
     try {
       setBuildingsLoading(true);
-      const buildings = await createOsmBuildingsAsync();
+      const buildings = applyTilesetMemoryBudget(await createOsmBuildingsAsync());
       buildingsRef.current = viewer.scene.primitives.add(buildings);
       setBuildingsEnabled(true);
       setToolMessage('');

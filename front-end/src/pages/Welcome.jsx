@@ -1,8 +1,8 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import embLogo from '../assets/emblogo.svg';
 import bgEmb from '../assets/bgemb.webp';
-import { useTheme } from '../context/ThemeContext';
+import { useTheme } from '../context/themeStore';
 import {
   IcoAlertTriangle,
   IcoArrowUp,
@@ -24,6 +24,7 @@ import {
   IcoTrendUp,
   IcoWater,
 } from '../components/Icons';
+import useReveal from '../utils/useReveal';
 import './Welcome.css';
 
 const CesiumStationMap = lazy(() => import('../components/CesiumStationMap'));
@@ -294,22 +295,28 @@ const Welcome = () => {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [contactsOpen, setContactsOpen] = useState(false);
 
-  useEffect(() => {
-    const io = new IntersectionObserver(
-      (entries) => entries.forEach((entry) => {
-        if (entry.isIntersecting) entry.target.classList.add('is-visible');
-      }),
-      { threshold: 0.12 },
-    );
-    document.querySelectorAll('.welcome-animate').forEach((el) => io.observe(el));
-    return () => io.disconnect();
-  }, []);
+  // Staggered entrance reveal (anime.js). Replaces a hand-rolled observer that
+  // never unobserved its targets, so its callback kept firing on every scroll
+  // for the lifetime of the page. useReveal is one-shot, compositor-only, and
+  // skips animating entirely under prefers-reduced-motion.
+  const revealRef = useReveal({ selector: '.welcome-animate' });
 
   useEffect(() => {
-    const onScroll = () => setShowScrollTop(window.scrollY > 480);
+    // rAF-throttled: the raw scroll handler ran setState on every scroll event.
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        setShowScrollTop(window.scrollY > 480);
+      });
+    };
     onScroll();
     window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
   }, []);
 
   const closeMobileNav = () => setMobileNavOpen(false);
@@ -317,7 +324,7 @@ const Welcome = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
   return (
-    <main className="welcome-page">
+    <main className="welcome-page" ref={revealRef}>
       <ContactsModal open={contactsOpen} onClose={() => setContactsOpen(false)} />
       <section
         className="welcome-hero"

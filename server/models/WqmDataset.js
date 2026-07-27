@@ -5,8 +5,9 @@ const wqmDatasetSchema = new mongoose.Schema(
     year: {
       type: Number,
       required: true,
+      // `unique` already creates the index; adding `index: true` as well made
+      // Mongoose emit a duplicate-index warning and build it twice.
       unique: true,
-      index: true,
     },
     sheets: {
       type: Array,

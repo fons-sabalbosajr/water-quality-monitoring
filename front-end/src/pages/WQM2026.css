@@ -213,6 +213,7 @@
 .wqm-table-wrap {
   overflow-x: auto;
   max-height: calc(100vh - 320px);
+  max-height: calc(100dvh - 320px);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
@@ -525,6 +526,7 @@
 
 .wqm-tabular-shell {
   min-height: calc(100vh - 2rem);
+  min-height: calc(100dvh - 2rem);
   border: 1px solid var(--border);
   border-radius: 0.85rem;
   background: var(--bg-card);
@@ -577,6 +579,7 @@
   display: grid;
   gap: 0.3rem;
   max-height: calc(100vh - 6rem);
+  max-height: calc(100dvh - 6rem);
   overflow-y: auto;
   padding: 0 0.55rem 0.75rem;
   scrollbar-width: thin;
@@ -900,11 +903,34 @@
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
 }
 
+/* Single scroll container.
+   Previously three regions could scroll at once — the modal body (global rule),
+   this body's own flex box, and the parameter table's own `scroll.y` of 70vh.
+   Nested scrollers are what made the Station Details modal awkward: the wheel
+   would move the inner table while the outer content stayed put, and the footer
+   could end up unreachable. The body is now the only thing that scrolls, and
+   the global `.ant-modal-body` max-height is cleared so it can use the full
+   height the modal content allows. */
 .wqm-station-modal-root .ant-modal-body {
   flex: 1 1 auto;
   min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.station-modal-body {
+  min-height: 0;
+}
+
+/* Keep the parameter names and month headers visible while the body scrolls. */
+.parameter-editor-ant-table .ant-table-thead > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
 }
 
 .parameter-editor-ant-table .ant-table {

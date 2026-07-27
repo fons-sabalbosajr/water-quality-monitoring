@@ -4,49 +4,74 @@ const os = require('os');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const AppSetting = require('../models/AppSetting');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, invalidateUser } = require('../middleware/authMiddleware');
 const { adminProtect } = require('../middleware/adminMiddleware');
 
 const PUBLISHED_WQM_YEAR_KEY = 'visualizationYear';
 const WQM_PUBLISHED_YEARS = [2024, 2025, 2026];
+const ROLES = ['admin', 'developer', 'user'];
+const STATUSES = ['pending', 'approved', 'rejected'];
+const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 
 // All routes require auth + admin/developer
 router.use(protect, adminProtect);
 
+// Reject malformed ids before they reach Mongo, so a bad path segment returns
+// 400 instead of surfacing a CastError as a 500.
+const withValidId = (handler) => async (req, res, next) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid user id.' });
+  }
+  return handler(req, res, next);
+};
+
 // @route GET /api/admin/users
-router.get('/users', async (req, res) => {
+router.get('/users', async (req, res, next) => {
   try {
-    const filter = req.query.status ? { status: req.query.status } : {};
-    const users = await User.find(filter).select('-password').sort({ createdAt: -1 });
-    res.json(users);
+    const { status } = req.query;
+    if (status && !STATUSES.includes(status)) {
+      return res.status(400).json({ message: 'Status filter must be pending, approved, or rejected.' });
+    }
+    const users = await User.find(status ? { status } : {})
+      .select('-password -resetPasswordToken -resetPasswordExpires')
+      .sort({ createdAt: -1 })
+      .limit(2000)
+      .lean();
+    return res.json(users);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    return next(err);
   }
 });
 
 // @route PATCH /api/admin/users/:id/role
-router.patch('/users/:id/role', async (req, res) => {
-  const { role } = req.body;
-  if (!['admin', 'developer', 'user'].includes(role)) {
+router.patch('/users/:id/role', withValidId(async (req, res, next) => {
+  const { role } = req.body || {};
+  if (!ROLES.includes(role)) {
     return res.status(400).json({ message: 'Role must be admin, developer, or user' });
+  }
+  // Without this an admin can demote themselves and immediately lose access to
+  // the very screen they are on.
+  if (req.params.id === req.user._id.toString() && role === 'user') {
+    return res.status(400).json({ message: 'Cannot remove your own administrator role.' });
   }
   try {
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { role },
-      { returnDocument: 'after', select: '-password' }
-    );
+      { returnDocument: 'after', runValidators: true },
+    ).select('-password -resetPasswordToken -resetPasswordExpires').lean();
     if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json(user);
+    invalidateUser(req.params.id);
+    return res.json(user);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    return next(err);
   }
-});
+}));
 
 // @route PATCH /api/admin/users/:id/status
-router.patch('/users/:id/status', async (req, res) => {
-  const { status } = req.body;
-  if (!['pending', 'approved', 'rejected'].includes(status)) {
+router.patch('/users/:id/status', withValidId(async (req, res, next) => {
+  const { status } = req.body || {};
+  if (!STATUSES.includes(status)) {
     return res.status(400).json({ message: 'Status must be pending, approved, or rejected' });
   }
   if (req.params.id === req.user._id.toString() && status !== 'approved') {
@@ -56,30 +81,48 @@ router.patch('/users/:id/status', async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { status },
-      { returnDocument: 'after', select: '-password' }
-    );
+      { returnDocument: 'after', runValidators: true },
+    ).select('-password -resetPasswordToken -resetPasswordExpires').lean();
     if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json(user);
+    // Drop the auth cache entry so a suspension takes effect on the next request
+    // rather than after the 15s TTL.
+    invalidateUser(req.params.id);
+    return res.json(user);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    return next(err);
   }
-});
+}));
 
 // @route PATCH /api/admin/users/:id
-router.patch('/users/:id', async (req, res) => {
-  const { name, email, role, status } = req.body;
+router.patch('/users/:id', withValidId(async (req, res, next) => {
+  const { name, email, role, status } = req.body || {};
   const updates = {};
 
-  if (name !== undefined) updates.name = String(name).trim();
-  if (email !== undefined) updates.email = String(email).trim().toLowerCase();
+  if (name !== undefined) {
+    const trimmed = String(name).trim();
+    if (!trimmed) return res.status(400).json({ message: 'Name is required.' });
+    if (trimmed.length > 120) return res.status(400).json({ message: 'Name is too long (max 120 characters).' });
+    updates.name = trimmed;
+  }
+  if (email !== undefined) {
+    const trimmed = String(email).trim().toLowerCase();
+    if (!trimmed) return res.status(400).json({ message: 'Email is required.' });
+    // The schema has a match validator, but findByIdAndUpdate only runs it when
+    // runValidators is set — validate here too so the message is explicit.
+    if (!EMAIL_PATTERN.test(trimmed)) return res.status(400).json({ message: 'Enter a valid email address.' });
+    updates.email = trimmed;
+  }
   if (role !== undefined) {
-    if (!['admin', 'developer', 'user'].includes(role)) {
+    if (!ROLES.includes(role)) {
       return res.status(400).json({ message: 'Role must be admin, developer, or user' });
+    }
+    if (req.params.id === req.user._id.toString() && role === 'user') {
+      return res.status(400).json({ message: 'Cannot remove your own administrator role.' });
     }
     updates.role = role;
   }
   if (status !== undefined) {
-    if (!['pending', 'approved', 'rejected'].includes(status)) {
+    if (!STATUSES.includes(status)) {
       return res.status(400).json({ message: 'Status must be pending, approved, or rejected' });
     }
     if (req.params.id === req.user._id.toString() && status !== 'approved') {
@@ -88,53 +131,69 @@ router.patch('/users/:id', async (req, res) => {
     updates.status = status;
   }
 
-  if (!updates.name && name !== undefined) return res.status(400).json({ message: 'Name is required.' });
-  if (!updates.email && email !== undefined) return res.status(400).json({ message: 'Email is required.' });
+  if (!Object.keys(updates).length) {
+    return res.status(400).json({ message: 'No changes were supplied.' });
+  }
 
   try {
     const user = await User.findByIdAndUpdate(
       req.params.id,
       updates,
-      { returnDocument: 'after', runValidators: true, select: '-password' }
-    );
+      { returnDocument: 'after', runValidators: true },
+    ).select('-password -resetPasswordToken -resetPasswordExpires').lean();
     if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json(user);
+    invalidateUser(req.params.id);
+    return res.json(user);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    if (err?.code === 11000) {
+      return res.status(409).json({ message: 'That email address is already registered.' });
+    }
+    return next(err);
   }
-});
+}));
 
 // @route DELETE /api/admin/users/:id
-router.delete('/users/:id', async (req, res) => {
+router.delete('/users/:id', withValidId(async (req, res, next) => {
   if (req.params.id === req.user._id.toString()) {
     return res.status(400).json({ message: 'Cannot delete your own account.' });
   }
   try {
-    const user = await User.findByIdAndDelete(req.params.id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json({ message: 'User deleted.' });
+    // Refuse to delete the last remaining administrator — otherwise the system
+    // can be locked out of its own account management screen.
+    const target = await User.findById(req.params.id).select('role').lean();
+    if (!target) return res.status(404).json({ message: 'User not found' });
+    if (target.role === 'admin') {
+      const adminCount = await User.countDocuments({ role: 'admin' });
+      if (adminCount <= 1) {
+        return res.status(400).json({ message: 'Cannot delete the last administrator account.' });
+      }
+    }
+
+    await User.findByIdAndDelete(req.params.id);
+    invalidateUser(req.params.id);
+    return res.json({ message: 'User deleted.', _id: req.params.id });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    return next(err);
   }
-});
+}));
 
 // @route GET /api/admin/settings/visualization-year
-router.get('/settings/visualization-year', async (req, res) => {
+router.get('/settings/visualization-year', async (req, res, next) => {
   try {
-    const setting = await AppSetting.findOne({ key: PUBLISHED_WQM_YEAR_KEY });
-    const year = Number(setting?.value || 2026);
-    res.json({
+    const setting = await AppSetting.findOne({ key: PUBLISHED_WQM_YEAR_KEY }).lean();
+    const year = Number(setting?.value ?? 2026);
+    return res.json({
       year: WQM_PUBLISHED_YEARS.includes(year) ? year : 2026,
       updatedAt: setting?.updatedAt || null,
       updatedBy: setting?.updatedBy || null,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    return next(err);
   }
 });
 
 // @route PATCH /api/admin/settings/visualization-year
-router.patch('/settings/visualization-year', async (req, res) => {
+router.patch('/settings/visualization-year', async (req, res, next) => {
   const year = Number(req.body?.year);
   if (!WQM_PUBLISHED_YEARS.includes(year)) {
     return res.status(400).json({ message: 'Published WQM year must be 2024, 2025, or 2026.' });
@@ -144,28 +203,30 @@ router.patch('/settings/visualization-year', async (req, res) => {
     const setting = await AppSetting.findOneAndUpdate(
       { key: PUBLISHED_WQM_YEAR_KEY },
       { key: PUBLISHED_WQM_YEAR_KEY, value: year, updatedBy: req.user._id },
-      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
-    );
-    res.json({
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
+    ).lean();
+    return res.json({
       year: Number(setting.value),
       updatedAt: setting.updatedAt,
       updatedBy: setting.updatedBy,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    return next(err);
   }
 });
 
 // @route GET /api/admin/system
 router.get('/system', (req, res) => {
   const dbState = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  const memory = process.memoryUsage();
   res.json({
     nodeVersion: process.version,
     platform: os.platform(),
     uptime: Math.floor(process.uptime()),
     dbStatus: dbState[mongoose.connection.readyState] || 'unknown',
     dbName: mongoose.connection.name || '',
-    memoryMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+    memoryMB: Math.round(memory.heapUsed / 1024 / 1024),
+    rssMB: Math.round(memory.rss / 1024 / 1024),
     hostname: os.hostname(),
     env: process.env.NODE_ENV || 'development',
   });

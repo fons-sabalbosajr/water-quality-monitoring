@@ -944,3 +944,130 @@
   color: var(--text-primary);
 }
 
+
+/* ── Activity Log ──────────────────────────────────────────────────────────
+   The log table previously rendered raw JSON in a single unconstrained column
+   and offered no way to narrow 500 entries down. These rules give it a real
+   toolbar, a compact two-line timestamp, and severity-tinted rows. */
+.logs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin-bottom: 0.85rem;
+}
+
+.logs-search {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 420px;
+}
+
+.logs-category-filter {
+  flex: 0 1 200px;
+  min-width: 150px;
+}
+
+.logs-chart {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Two-line timestamp keeps the column narrow without losing the date. */
+.log-time {
+  display: grid;
+  line-height: 1.25;
+}
+
+.log-time-main {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 0.78rem;
+}
+
+.log-time-date {
+  font-size: 0.68rem;
+  color: var(--text-muted, #6b7280);
+}
+
+.log-actor {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.log-actor-name {
+  font-weight: 600;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-role-tag {
+  justify-self: start;
+  font-size: 0.62rem !important;
+  line-height: 1.4 !important;
+  margin-inline-end: 0 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.log-action {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+/* Destructive actions should be findable by eye when scanning the log. */
+.log-action-critical {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.log-details {
+  font-family: var(--app-font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted, #6b7280);
+}
+
+.log-empty {
+  color: var(--text-muted, #6b7280);
+}
+
+/* Left accent rather than a full row tint — readable in both themes. */
+.logs-table .log-row-critical > td:first-child {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.logs-table .log-row-notice > td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.logs-table .ant-table-tbody > tr > td {
+  padding-block: 0.45rem !important;
+}
+
+@media (max-width: 640px) {
+  .logs-search,
+  .logs-category-filter {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+}
+
+/* Pre-JS state for the admin panel reveal (driven by utils/useReveal.js).
+   Kept to opacity/transform only so the animation stays on the compositor. */
+.settings-section {
+  opacity: 0;
+  transform: translateY(14px);
+}
+
+/* If the reveal never runs (JS error, reduced motion before the hook mounts),
+   the sections must still be readable rather than permanently invisible. */
+@media (prefers-reduced-motion: reduce) {
+  .settings-section {
+    opacity: 1;
+    transform: none;
+  }
+}

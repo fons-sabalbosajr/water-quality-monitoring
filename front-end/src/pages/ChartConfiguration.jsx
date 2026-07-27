@@ -16,7 +16,7 @@ import {
   buildStationMultiYearSeries, matchStationAcrossYears, forecastNextMonth,
 } from '../utils/lineChartSettings';
 import { logActivity } from '../utils/appLog';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/authStore';
 import './ChartConfiguration.css';
 
 const FORECAST_COLOR = '#f59e0b';

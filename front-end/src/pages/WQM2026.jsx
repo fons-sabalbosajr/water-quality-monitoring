@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 dayjs.extend(customParseFormat);
@@ -10,14 +10,19 @@ import {
   RightOutlined,
 } from '@ant-design/icons';
 import 'antd/dist/reset.css';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/authStore';
 import api from '../api/axios';
 import { logActivity } from '../utils/appLog';
 import { toastSaved } from '../utils/swal';
 import encryptedStorage from '../utils/encryptedStorage';
+import { useTablePagination } from '../utils/tablePagination';
+import {
+  applyDraftParamValue, applyDraftSamplingDate, buildStationDraft,
+  computeAnnualAverage, normalizeMonthly, parseEditableValue,
+} from '../utils/stationDraft';
 import {
   MONTHS_SHORT, PARAM_LIMITS, fmt, getAvailableParams, getParamData,
-  getParamUnit, normalizeParamName, OBSERVATION_PARAM, toNumber,
+  getParamUnit, normalizeParamName, OBSERVATION_PARAM,
 } from '../utils/wqmData';
 import {
   INITIAL_SHEETS, WATERBODY_PROVINCE, getStoredWqmSheets,
@@ -29,7 +34,6 @@ import './WQM2026.css';
 const { Sider, Content } = Layout;
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
-const normalizeMonthly = (monthly = []) => Array.from({ length: 12 }, (_, index) => monthly[index] ?? null);
 const getYearDraftKey = (year) => `wqm_${year}_drafts`;
 
 // Sentinel "parameter" used to render the Date of Sampling row inside the
@@ -56,24 +60,6 @@ const resetStoredSheetsForYear = (year) => {
   encryptedStorage.removeItem(getYearDraftKey(year));
 };
 
-const computeAnnualAverage = (monthly = []) => {
-  // Censored readings such as "<5" or ">100" are still counted in the annual
-  // average using their numeric portion (the detection/quantitation limit).
-  // toNumber() extracts that number, so values carrying a "<" sign are included.
-  const values = normalizeMonthly(monthly).map(toNumber).filter((value) => value !== null);
-  if (!values.length) return null;
-  return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(4));
-};
-
-const parseEditableValue = (value) => {
-  const cleaned = String(value ?? '').trim();
-  if (!cleaned || cleaned === '-' || cleaned === '—') return null;
-  if (cleaned === '*') return '*';
-  if (/^</.test(cleaned)) return cleaned;
-  const numeric = Number(cleaned.replace(/,/g, ''));
-  return Number.isFinite(numeric) ? numeric : cleaned;
-};
-
 const getDisplayParamName = (param) => (normalizeParamName(param) === OBSERVATION_PARAM ? 'Observations' : param);
 
 const getWqgStandard = (param) => {
@@ -95,21 +81,6 @@ const getParamStorageKey = (station, displayParam) => (
   Object.keys(station.params || {}).find((key) => normalizeParamName(key) === normalizeParamName(displayParam)) || displayParam
 );
 
-const buildStationDraft = (station, params, defaultClass = '') => ({
-  stnNo: station?.stnNo ?? '',
-  stnId: station?.stnId ?? '',
-  address: station?.address ?? '',
-  classInfo: station?.classInfo ?? defaultClass ?? '',
-  samplingDates: normalizeMonthly(station?.samplingDates).map((value) => value ?? ''),
-  params: Object.fromEntries(params.map((param) => {
-    const data = station ? getParamData(station, param) : null;
-    return [param, {
-      monthly: normalizeMonthly(data?.monthly).map((value) => value ?? ''),
-      avg: computeAnnualAverage(data?.monthly) ?? data?.avg ?? '',
-    }];
-  })),
-});
-
 const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   const { user } = useAuth();
   const canManageData = ['admin', 'developer'].includes(user?.role);
@@ -128,6 +99,22 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   const [waterbodyModalOpen, setWaterbodyModalOpen] = useState(false);
   const [waterbodyDraft, setWaterbodyDraft] = useState(null);
   const [waterbodyDraftError, setWaterbodyDraftError] = useState('');
+  const [saving, setSaving] = useState(false);
+  // Typing in the search box re-filtered and re-rendered the whole table on
+  // every keystroke; the table only reads the debounced value.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+
+  // Mirror of `sheets` so updateSheets() can read the latest value without
+  // depending on the state variable captured in a stale closure.
+  const sheetsRef = useRef(sheets);
+  useEffect(() => { sheetsRef.current = sheets; }, [sheets]);
+
+  const { pagination: tablePagination, onTotalChange } = useTablePagination('wqm-stations');
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 200);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     let cancelled = false;
@@ -218,11 +205,11 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
 
   const stationRows = useMemo(() => {
     if (!sheet) return [];
-    const query = search.toLowerCase().trim();
+    const query = debouncedSearch.toLowerCase().trim();
     return sheet.stations
       .filter((station) => !query || [station.stnId, station.address, station.stnNo]
         .some((value) => String(value || '').toLowerCase().includes(query)))
-      .map((station) => {
+      .map((station, stationIndex) => {
         const available = params.filter((param) => getParamData(station, param));
         const latestValues = available
           .map((param) => {
@@ -240,7 +227,10 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
           .slice(0, 3);
 
         return {
-          key: station.stnNo,
+          // stnNo is user-editable and not guaranteed unique. Duplicates made
+          // React reuse the wrong row, so edits appeared on the wrong station
+          // and sorting produced unstable output. Fall back to the index.
+          key: `${sheet.key}:${station.stnNo ?? 'n'}:${stationIndex}`,
           station,
           stnNo: station.stnNo,
           stnId: station.stnId,
@@ -249,32 +239,53 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
           latestValues,
         };
       });
-  }, [params, periodLabels, search, sheet]);
+  }, [params, periodLabels, debouncedSearch, sheet]);
 
-  const updateSheets = (updater, successMessage, logDetails) => {
-    setSheets((current) => {
-      const next = updater(clone(current));
-      // Always cache the new data locally AND broadcast the draft event so every
-      // page (Dashboard, Visualizations, Waterbody Profiles, Public Dashboard)
-      // reflects the update immediately.
-      saveYearSheetsLocal(year, next);
-      if (successMessage) setMessage(successMessage);
-      // 2024/2025 are additionally persisted to MongoDB for durability.
-      if (!isLocalYear(year)) {
-        api.put(`/water/wqm/${year}`, { sheets: next })
-          .then(() => setMessage(successMessage || `WQM ${year} saved to MongoDB.`))
-          .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`));
-      }
-      if (logDetails) logActivity(logDetails.action, logDetails.details, user);
-      return next;
-    });
-  };
+  // Searching or deleting can shrink the result set below the current page.
+  useEffect(() => { onTotalChange(stationRows.length); }, [stationRows.length, onTotalChange]);
 
-  const openStationModal = (mode, station = null) => {
+  // Persist a new sheet set: local encrypted draft always, MongoDB for the
+  // 2024/2025 archives. Kept separate from setState so it is only ever run once
+  // per user action.
+  const persistSheets = useCallback((next, successMessage) => {
+    // Always cache the new data locally AND broadcast the draft event so every
+    // page (Dashboard, Visualizations, Waterbody Profiles, Public Dashboard)
+    // reflects the update immediately.
+    saveYearSheetsLocal(year, next);
+    if (successMessage) setMessage(successMessage);
+    // 2024/2025 are additionally persisted to MongoDB for durability.
+    if (!isLocalYear(year)) {
+      setSaving(true);
+      api.put(`/water/wqm/${year}`, { sheets: next })
+        .then(() => setMessage(successMessage || `WQM ${year} saved to MongoDB.`))
+        .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`))
+        .finally(() => setSaving(false));
+    }
+  }, [year]);
+
+  /**
+   * React may invoke a state updater more than once (StrictMode does so
+   * deliberately in development). The previous version ran the local save, the
+   * MongoDB PUT and the activity log *inside* the updater, so every edit fired
+   * two network writes and wrote two log entries. Compute the next value from
+   * the current sheets, then commit state and side effects separately.
+   */
+  const updateSheets = useCallback((updater, successMessage, logDetails) => {
+    const next = updater(clone(sheetsRef.current));
+    sheetsRef.current = next;
+    setSheets(next);
+    persistSheets(next, successMessage);
+    if (logDetails) logActivity(logDetails.action, logDetails.details, user);
+  }, [persistSheets, user]);
+
+  const openStationModal = useCallback((mode, station = null) => {
     setModalMode(mode);
     setEditingStation(station);
+    // Must read the *current* modalParams. When this closed over a stale empty
+    // list, the draft was built with no params while the modal still rendered
+    // rows for every real parameter — and the first keystroke crashed.
     setStationDraft(buildStationDraft(station, modalParams, sheet?.classInfo || ''));
-  };
+  }, [modalParams, sheet]);
 
   const closeModal = () => {
     setModalMode(null);
@@ -287,21 +298,12 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   };
 
   const setDraftParam = (param, field, value, monthIndex = null) => {
-    setStationDraft((draft) => {
-      const next = clone(draft);
-      if (field === 'monthly') next.params[param].monthly[monthIndex] = value;
-      next.params[param].avg = computeAnnualAverage(next.params[param].monthly) ?? '';
-      return next;
-    });
+    if (field !== 'monthly') return;
+    setStationDraft((draft) => applyDraftParamValue(draft, param, value, monthIndex));
   };
 
   const setDraftSamplingDate = (monthIndex, value) => {
-    setStationDraft((draft) => {
-      const next = clone(draft);
-      if (!Array.isArray(next.samplingDates)) next.samplingDates = normalizeMonthly([]);
-      next.samplingDates[monthIndex] = value;
-      return next;
-    });
+    setStationDraft((draft) => applyDraftSamplingDate(draft, monthIndex, value));
   };
 
   const saveStation = () => {
@@ -315,7 +317,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
         .map((value) => (String(value ?? '').trim() || null)),
       params: Object.fromEntries(modalParams.map((param) => {
         const paramKey = editingStation ? getParamStorageKey(editingStation, param) : param;
-        const draftParam = stationDraft.params[param] || { monthly: [], avg: '' };
+        const draftParam = stationDraft.params?.[param] || { monthly: [], avg: '' };
         return [paramKey, {
           monthly: normalizeMonthly(draftParam.monthly).map(parseEditableValue),
           avg: normalizeParamName(param) === OBSERVATION_PARAM ? null : computeAnnualAverage(draftParam.monthly),
@@ -354,7 +356,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
     });
   };
 
-  const deleteStation = (station) => {
+  const deleteStation = useCallback((station) => {
     if (!sheet || !canEditYear) return;
     updateSheets((draft) => draft.map((item) => (
       item.key === sheet.key
@@ -364,7 +366,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
       action: 'Deleted station record',
       details: { waterbody: sheet.name, station: station.stnId },
     });
-  };
+  }, [sheet, canEditYear, year, updateSheets]);
 
   const resetDrafts = () => {
     if (!canEditYear || year !== 2026) return;
@@ -464,17 +466,33 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
     logActivity('Exported tabular results CSV', { waterbody: sheet.name }, user);
   };
 
-  const columns = [
+  // Memoised so antd's Table does not treat its column set as changed on every
+  // render. The dependencies must include the handlers the cells call: an
+  // earlier version pinned this to [canEditYear] alone, which froze the row
+  // buttons on their first-render closures and made "Edit" build a station
+  // draft from an empty parameter list.
+  const columns = useMemo(() => [
     {
       title: 'Stn. No.',
       dataIndex: 'stnNo',
-      width: 96,
-      sorter: (a, b) => Number(a.stnNo) - Number(b.stnNo),
+      width: 84,
+      align: 'center',
+      // Non-numeric station numbers produced NaN, which sorts unpredictably.
+      sorter: (a, b) => {
+        const left = Number(a.stnNo);
+        const right = Number(b.stnNo);
+        if (Number.isFinite(left) && Number.isFinite(right)) return left - right;
+        return String(a.stnNo ?? '').localeCompare(String(b.stnNo ?? ''), undefined, { numeric: true });
+      },
     },
     {
       title: 'Station',
       dataIndex: 'stnId',
-      width: 260,
+      // Was a fixed 260px. A proportional minimum lets the column grow on wide
+      // screens and shrink (with ellipsis) on narrow ones instead of forcing
+      // the whole table into horizontal scroll.
+      minWidth: 200,
+      ellipsis: true,
       render: (_, row) => (
         <div className="wqm-station-summary">
           <strong>{row.stnId}</strong>
@@ -483,23 +501,32 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
       ),
     },
     {
-      title: 'Parameters With Values',
+      title: 'Parameters',
       dataIndex: 'parameterCount',
-      width: 120,
+      width: 118,
+      align: 'center',
       render: (value) => <Tag color="blue">{value} parameters</Tag>,
     },
     {
       title: 'Latest Readings',
       dataIndex: 'latestValues',
+      minWidth: 220,
       render: (values) => (
         <div className="wqm-latest-list">
-          {values.length ? values.map((value) => <span key={value}>{value}</span>) : <span className="wqm-muted">No readings</span>}
+          {values.length
+            ? values.map((value, index) => <span key={`${index}-${value}`}>{value}</span>)
+            : <span className="wqm-muted">No readings</span>}
         </div>
       ),
     },
     {
       title: 'Actions',
       key: 'actions',
+      width: canEditYear ? 132 : 56,
+      align: 'center',
+      // `fixed: 'right'` permanently splits the table into two scrolling panes.
+      // With the columns now fitting the container, the split is unnecessary
+      // below the breakpoint where a scrollbar would appear at all.
       fixed: 'right',
       render: (_, row) => (
         <Space size={6} wrap>
@@ -521,7 +548,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
         </Space>
       ),
     },
-  ];
+  ], [canEditYear, openStationModal, deleteStation]);
 
   const classLabel = sheet?.classInfo?.match(/CLASS\s+(\S+)/)?.[1] || '';
   const visibleMonthIndices = useMemo(() => {
@@ -534,7 +561,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
     return MONTHS_SHORT
       .map((_, index) => index)
       .filter((monthIndex) => modalParams.some((param) => {
-        const value = stationDraft.params[param]?.monthly?.[monthIndex];
+        const value = stationDraft.params?.[param]?.monthly?.[monthIndex];
         return isFilledMonthValue(value);
       }));
   }, [modalMode, modalParams, stationDraft]);
@@ -592,7 +619,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
           );
         }
         const isObservation = normalizeParamName(row.param) === OBSERVATION_PARAM;
-        const value = stationDraft?.params[row.param]?.monthly?.[monthIndex] ?? '';
+        const value = stationDraft?.params?.[row.param]?.monthly?.[monthIndex] ?? '';
         return isObservation ? (
           <Input.TextArea
             className="parameter-observation-input"
@@ -620,7 +647,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
         if (row.param === DATE_ROW_KEY) return <span className="wqm-muted">-</span>;
         return normalizeParamName(row.param) === OBSERVATION_PARAM
           ? <span className="wqm-muted">-</span>
-          : <Input size="small" value={stationDraft?.params[row.param]?.avg ?? ''} />;
+          : <Input size="small" value={stationDraft?.params?.[row.param]?.avg ?? ''} />;
       },
     },
   ];
@@ -629,8 +656,8 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
     ...modalParams.map((param) => ({
       key: param,
       param,
-      monthly: stationDraft?.params[param]?.monthly || [],
-      avg: stationDraft?.params[param]?.avg ?? '',
+      monthly: stationDraft?.params?.[param]?.monthly || [],
+      avg: stationDraft?.params?.[param]?.avg ?? '',
     })),
   ];
 
@@ -775,15 +802,15 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
                 : 'Read-only mode. Only administrators and developers can edit this dataset.')}
             </div>
           )}
-
           <Table
             className="wqm-ant-table wqm-stations-table"
             size="small"
             rowKey="key"
             columns={columns}
             dataSource={stationRows}
-            scroll={{ x: 1040, y: 'calc(100vh - 350px)' }}
-            pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 25, 50, 100] }}
+            scroll={{ x: 720, y: 'calc(100dvh - 340px)' }}
+            pagination={tablePagination}
+            loading={saving}
           />
         </Content>
         )}
@@ -830,7 +857,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
               columns={modalParameterColumns}
               dataSource={modalParameterRows}
               pagination={false}
-              scroll={{ y: '70vh' }}
+              tableLayout="fixed"
             />
           </div>
         )}

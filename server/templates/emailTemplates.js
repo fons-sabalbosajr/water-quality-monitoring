@@ -3,7 +3,20 @@
  * All templates share a consistent brand: EMB palette + logo text header.
  */
 
-const BASE_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+// The React app is served under a base path (vite `base` + BrowserRouter
+// `basename`), but CLIENT_URL is just the origin. Without the base path every
+// link in these emails pointed at a route that does not exist — including the
+// password-reset link, which made email-based reset unusable.
+// Override CLIENT_BASE_PATH (empty string is valid) if the app is ever served
+// from the domain root.
+const CLIENT_ORIGIN = (process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/+$/, '');
+const CLIENT_BASE_PATH = (process.env.CLIENT_BASE_PATH ?? '/water-quality-monitoring')
+  .replace(/\/+$/, '');
+
+// Tolerate a CLIENT_URL that already carries the base path.
+const BASE_URL = CLIENT_ORIGIN.endsWith(CLIENT_BASE_PATH) || !CLIENT_BASE_PATH
+  ? CLIENT_ORIGIN
+  : `${CLIENT_ORIGIN}${CLIENT_BASE_PATH}`;
 
 const header = `
   <div style="background:linear-gradient(135deg,#101F43 0%,#253C78 60%,#395BAF 100%);
@@ -57,7 +70,7 @@ const welcomeTemplate = ({ name }) => ({
       You can now log in and access real-time water quality data for Region III.
     </p>
     <div style="text-align:center;margin:24px 0;">
-      <a href="${BASE_URL}/login"
+      <a href="${BASE_URL}/admin"
          style="background:linear-gradient(135deg,#253C78,#446ACB);color:#fff;
                 text-decoration:none;padding:12px 32px;border-radius:6px;
                 font-size:15px;font-weight:600;display:inline-block;">
@@ -117,7 +130,7 @@ const passwordResetSuccessTemplate = ({ name }) => ({
       </p>
     </div>
     <div style="text-align:center;margin:24px 0;">
-      <a href="${BASE_URL}/login"
+      <a href="${BASE_URL}/admin"
          style="background:linear-gradient(135deg,#253C78,#446ACB);color:#fff;
                 text-decoration:none;padding:12px 32px;border-radius:6px;
                 font-size:15px;font-weight:600;display:inline-block;">

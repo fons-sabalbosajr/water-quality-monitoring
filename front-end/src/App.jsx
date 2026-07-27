@@ -1,8 +1,9 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
 import { ConfigProvider, theme as antdTheme } from 'antd';
 import { AuthProvider } from './context/AuthContext';
-import { ThemeProvider, useTheme } from './context/ThemeContext';
+import { ThemeProvider } from './context/ThemeContext';
+import { useTheme } from './context/themeStore';
 import ProtectedRoute from './components/ProtectedRoute';
 import embLogo from './assets/emblogo.svg';
 
@@ -43,7 +44,10 @@ const AntThemeBridge = ({ children }) => {
           colorSuccess: '#7CB675',
           colorWarning: '#f59e0b',
           borderRadius: 8,
-          fontFamily: "'Inter', system-ui, 'Segoe UI', Roboto, sans-serif",
+          // Mirrors --app-font-family in index.css. antd needs a literal string
+          // here (it feeds the value into inline styles), so the two must be
+          // kept in sync — index.css is the source of truth.
+          fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
           ...(isDark ? {
             colorBgBase: '#0f172a',
             colorBgContainer: '#1e293b',
@@ -69,7 +73,12 @@ function App() {
             <Suspense fallback={<AppLoading />}>
               <Routes>
                 <Route path="/welcome" element={<Welcome />} />
-                <Route path="/login" element={<Login />} />
+                <Route path="/admin" element={<Login />} />
+                {/* Legacy path. Existing bookmarks, the browser's saved
+                    credentials, and any password-reset email already delivered
+                    still point at /login, so keep it resolving instead of
+                    falling through to the catch-all redirect. */}
+                <Route path="/login" element={<Navigate to="/admin" replace />} />
                 <Route path="/register" element={<Register />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
                 <Route path="/reset-password/:token" element={<ResetPassword />} />

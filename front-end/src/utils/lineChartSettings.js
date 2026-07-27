@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import encryptedStorage from './encryptedStorage';
+import encryptedStorage from './encryptedStorage.js';
 
 export const LINE_CHART_MERGE_KEY = 'wqms_linechart_merge_settings';
 export const LINE_CHART_MERGE_EVENT = 'wqms:linechart-merge';

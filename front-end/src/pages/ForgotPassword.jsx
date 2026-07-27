@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import api from '../api/axios';
 import bagongLogo from '../assets/bagongpilipinaslogo.png';
 import embLogo from '../assets/emblogo.svg';
+import AuthThemeToggle from '../components/AuthThemeToggle';
 import './Login.css';
 
 const ForgotPassword = () => {
@@ -31,6 +32,7 @@ const ForgotPassword = () => {
       <div className="login-bg" aria-hidden="true" />
 
       <div className="login-card">
+        <AuthThemeToggle />
         <div className="login-brand">
           <div className="brand-logos">
             <img src={bagongLogo} alt="Bagong Pilipinas" />
@@ -84,7 +86,7 @@ const ForgotPassword = () => {
         )}
 
         <p className="login-footer" style={{ marginTop: '1.25rem' }}>
-          <Link to="/login">← Back to Sign In</Link>
+          <Link to="/admin">← Back to Sign In</Link>
         </p>
       </div>
     </div>

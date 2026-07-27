@@ -1,14 +1,18 @@
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
+const { adminProtect } = require('../middleware/adminMiddleware');
 const WqmDataset = require('../models/WqmDataset');
 const AppSetting = require('../models/AppSetting');
 const { parseWorkbook } = require('../utils/wqmWorkbook');
+const { validateSheets } = require('../utils/validateSheets');
 
 const IMPORTED_WQM_YEARS = [2024, 2025];
 const WQM_PUBLISHED_YEARS = [2024, 2025, 2026];
 const PUBLISHED_WQM_YEAR_KEY = 'visualizationYear';
+const DEFAULT_PUBLISHED_YEAR = 2026;
 
 const getGeminiKey = () => process.env.GEMINI_API_KEY
   || process.env.GEMINI_KEY
@@ -24,6 +28,7 @@ const getMapTilerKey = () => process.env.MAPTILER_API_KEY
 
 const DEFAULT_FORECAST_MODEL = 'gemini-2.5-flash';
 const getGeminiModel = () => process.env.GEMINI_MODEL || DEFAULT_FORECAST_MODEL;
+const FORECAST_TIMEOUT_MS = Number(process.env.FORECAST_TIMEOUT_MS || 25000);
 
 const extractJson = (text) => {
   const cleaned = String(text || '').replace(/```json|```/g, '').trim();
@@ -36,75 +41,124 @@ const extractJson = (text) => {
   }
 };
 
-// Mock water quality data — replace with real MongoDB collection later
-const mockReadings = [
-  { id: 1, location: 'Station A', ph: 7.2, turbidity: 1.5, temperature: 26.4, dissolved_oxygen: 8.1, date: '2026-04-22T08:00:00Z', status: 'normal' },
-  { id: 2, location: 'Station B', ph: 6.8, turbidity: 3.2, temperature: 28.0, dissolved_oxygen: 6.9, date: '2026-04-22T08:00:00Z', status: 'warning' },
-  { id: 3, location: 'Station C', ph: 7.5, turbidity: 0.8, temperature: 25.1, dissolved_oxygen: 9.0, date: '2026-04-22T08:00:00Z', status: 'normal' },
-  { id: 4, location: 'Station D', ph: 5.2, turbidity: 8.9, temperature: 30.5, dissolved_oxygen: 4.2, date: '2026-04-22T08:00:00Z', status: 'critical' },
-];
+const parseYear = (value) => {
+  const year = Number(value);
+  return Number.isInteger(year) ? year : NaN;
+};
 
 const importWqmYear = async (year) => {
   const sourceFile = path.resolve(__dirname, '..', '..', 'front-end', 'docs', `wqm${year}.xlsx`);
+  // The import path only exists in a source checkout. Say so explicitly instead
+  // of letting read-excel-file throw an opaque ENOENT.
+  if (!fs.existsSync(sourceFile)) {
+    const error = new Error(`Source workbook for WQM ${year} is not available on this server.`);
+    error.status = 404;
+    throw error;
+  }
   const sheets = await parseWorkbook(sourceFile, year);
   if (!sheets.length) throw new Error(`No WQM sheets parsed for ${year}.`);
   return WqmDataset.findOneAndUpdate(
     { year },
     { year, sheets, sourceFile, importedAt: new Date() },
-    { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
+    { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
   );
 };
 
-// @route   GET /api/water/readings
-// @desc    Get all water quality readings
-// @access  Private
-router.get('/readings', protect, (req, res) => {
-  res.json(mockReadings);
-});
+const readPublishedYear = async () => {
+  const setting = await AppSetting.findOne({ key: PUBLISHED_WQM_YEAR_KEY }).lean();
+  const year = Number(setting?.value ?? DEFAULT_PUBLISHED_YEAR);
+  return WQM_PUBLISHED_YEARS.includes(year) ? year : DEFAULT_PUBLISHED_YEAR;
+};
 
-// @route   GET /api/water/summary
-// @desc    Get summary statistics
-// @access  Private
-router.get('/summary', protect, (req, res) => {
-  const total = mockReadings.length;
-  const normal = mockReadings.filter((r) => r.status === 'normal').length;
-  const warning = mockReadings.filter((r) => r.status === 'warning').length;
-  const critical = mockReadings.filter((r) => r.status === 'critical').length;
-
-  res.json({ total, normal, warning, critical });
-});
-
-router.get('/visualization-year', protect, async (req, res) => {
+// @route   GET /api/water/public/visualization-year
+// @desc    Published year for the unauthenticated public dashboard
+// @access  Public
+// The public dashboard previously called the protected /visualization-year
+// endpoint, so every public page load fired a request that 401'd and silently
+// fell back to a locally cached year.
+router.get('/public/visualization-year', async (req, res, next) => {
   try {
-    const setting = await AppSetting.findOne({ key: PUBLISHED_WQM_YEAR_KEY });
-    const year = Number(setting?.value || 2026);
-    return res.json({ year: WQM_PUBLISHED_YEARS.includes(year) ? year : 2026 });
+    res.set('Cache-Control', 'public, max-age=60');
+    return res.json({ year: await readPublishedYear() });
   } catch (error) {
-    return res.status(500).json({ message: error.message || 'Unable to load published WQM year.' });
+    return next(error);
   }
 });
 
-router.get('/wqm/:year', protect, async (req, res) => {
-  const year = Number(req.params.year);
+router.get('/visualization-year', protect, async (req, res, next) => {
+  try {
+    return res.json({ year: await readPublishedYear() });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+/**
+ * Serve a stored year. A WQM year document is several MB, so it is fetched with
+ * a conditional-request guard: the importedAt timestamp is read first (a tiny
+ * projection) and turned into an ETag. When the client already has that
+ * version, the multi-MB sheets array is never loaded from Mongo or serialized.
+ */
+const sendYearDataset = async (req, res, year) => {
+  const meta = await WqmDataset.findOne({ year }).select('importedAt updatedAt').lean();
+
+  let dataset = meta;
+  if (!dataset) {
+    const imported = await importWqmYear(year);
+    dataset = { importedAt: imported.importedAt };
+  } else {
+    const etag = `W/"wqm-${year}-${new Date(dataset.importedAt || 0).getTime()}"`;
+    res.set('ETag', etag);
+    res.set('Cache-Control', 'private, no-cache');
+    if (req.headers['if-none-match'] === etag) {
+      return res.status(304).end();
+    }
+  }
+
+  const full = await WqmDataset.findOne({ year }).select('sheets importedAt').lean();
+  if (!full) {
+    return res.status(404).json({ message: `WQM ${year} data is not available.` });
+  }
+  res.set('ETag', `W/"wqm-${year}-${new Date(full.importedAt || 0).getTime()}"`);
+  return res.json({
+    year,
+    importedAt: full.importedAt,
+    sheets: full.sheets || [],
+  });
+};
+
+// @route   GET /api/water/public/wqm/:year
+// @access  Public — read-only archive for the public dashboard
+router.get('/public/wqm/:year', async (req, res, next) => {
+  const year = parseYear(req.params.year);
+  if (!IMPORTED_WQM_YEARS.includes(year)) {
+    return res.status(400).json({ message: 'Only imported WQM years 2024 and 2025 are available.' });
+  }
+  try {
+    return await sendYearDataset(req, res, year);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/wqm/:year', protect, async (req, res, next) => {
+  const year = parseYear(req.params.year);
   if (!IMPORTED_WQM_YEARS.includes(year)) {
     return res.status(400).json({ message: 'Only imported WQM years 2024 and 2025 are available from MongoDB.' });
   }
 
   try {
-    let dataset = await WqmDataset.findOne({ year });
-    if (!dataset) dataset = await importWqmYear(year);
-    return res.json({
-      year,
-      importedAt: dataset.importedAt,
-      sheets: dataset.sheets,
-    });
+    return await sendYearDataset(req, res, year);
   } catch (error) {
-    return res.status(500).json({ message: error.message || `Unable to load WQM ${year} data.` });
+    return next(error);
   }
 });
 
-router.post('/wqm/:year/import', protect, async (req, res) => {
-  const year = Number(req.params.year);
+// Importing rewrites a whole year from the bundled workbook — restrict it to
+// admins/developers. It was previously open to any authenticated user, so a
+// read-only account could overwrite live data with the source file.
+router.post('/wqm/:year/import', protect, adminProtect, async (req, res, next) => {
+  const year = parseYear(req.params.year);
   if (!IMPORTED_WQM_YEARS.includes(year)) {
     return res.status(400).json({ message: 'Only WQM years 2024 and 2025 can be imported by this endpoint.' });
   }
@@ -118,40 +172,41 @@ router.post('/wqm/:year/import', protect, async (req, res) => {
       sheetCount: dataset.sheets.length,
     });
   } catch (error) {
-    return res.status(500).json({ message: error.message || `Unable to import WQM ${year}.` });
+    if (error.status === 404) return res.status(404).json({ message: error.message });
+    return next(error);
   }
 });
 
 // @route   PUT /api/water/wqm/:year
 // @desc    Officially save updated WQM sheets to MongoDB (admin/developer only)
 // @access  Private — admin or developer
-const { adminProtect } = require('../middleware/adminMiddleware');
-
-router.put('/wqm/:year', protect, adminProtect, async (req, res) => {
-  const year = Number(req.params.year);
+router.put('/wqm/:year', protect, adminProtect, async (req, res, next) => {
+  const year = parseYear(req.params.year);
   if (!IMPORTED_WQM_YEARS.includes(year)) {
     return res.status(400).json({ message: `Only WQM years ${IMPORTED_WQM_YEARS.join(' and ')} can be updated via this endpoint.` });
   }
 
   const { sheets } = req.body || {};
-  if (!Array.isArray(sheets) || !sheets.length) {
-    return res.status(400).json({ message: 'A non-empty sheets array is required.' });
+  const validationError = validateSheets(sheets);
+  if (validationError) {
+    return res.status(400).json({ message: validationError });
   }
 
   try {
     const dataset = await WqmDataset.findOneAndUpdate(
       { year },
-      { sheets, importedAt: new Date() },
+      { $set: { sheets, importedAt: new Date() }, $setOnInsert: { year } },
       { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
-    );
+    ).select('importedAt').lean();
+
     return res.json({
       message: `WQM ${year} saved to MongoDB.`,
       year,
       importedAt: dataset.importedAt,
-      sheetCount: dataset.sheets.length,
+      sheetCount: sheets.length,
     });
   } catch (error) {
-    return res.status(500).json({ message: error.message || `Unable to save WQM ${year}.` });
+    return next(error);
   }
 });
 
@@ -168,10 +223,9 @@ router.get('/forecast/status', protect, (req, res) => {
 });
 
 router.get('/maptiler-key', protect, (req, res) => {
-  res.json({
-    configured: Boolean(getMapTilerKey()),
-    key: getMapTilerKey(),
-  });
+  const key = getMapTilerKey();
+  res.set('Cache-Control', 'private, max-age=300');
+  res.json({ configured: Boolean(key), key });
 });
 
 router.post('/forecast', protect, async (req, res) => {
@@ -194,6 +248,11 @@ router.post('/forecast', protect, async (req, res) => {
     diagnostics = {},
     currentAsOf = '',
   } = req.body || {};
+
+  if (!Array.isArray(observed) || !Array.isArray(stations) || !Array.isArray(localForecast)) {
+    return res.status(400).json({ message: 'observed, stations, and localForecast must be arrays.' });
+  }
+
   const prompt = [
     'You are forecasting water quality monitoring readings from the current encoded dataset.',
     'Return only valid JSON with this shape:',
@@ -209,10 +268,16 @@ router.post('/forecast', protect, async (req, res) => {
     `Local diagnostics: ${JSON.stringify(diagnostics)}`,
   ].join('\n');
 
+  // Without a timeout an unresponsive upstream held the Express handler (and a
+  // Mongo-pool-adjacent socket) open indefinitely.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), FORECAST_TIMEOUT_MS);
+
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: abort.signal,
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: {
@@ -222,10 +287,13 @@ router.post('/forecast', protect, async (req, res) => {
       }),
     });
 
-    const data = await response.json();
+    const data = await response.json().catch(() => null);
     if (!response.ok) {
-      return res.status(response.status).json({
-        message: data?.error?.message || 'AI forecast request failed.',
+      return res.status(response.status === 429 ? 429 : 502).json({
+        // Never echo the upstream message verbatim — it can contain the key.
+        message: response.status === 429
+          ? 'AI forecast rate limit reached. Try again shortly.'
+          : 'AI forecast request failed.',
         configured: true,
         model,
       });
@@ -268,11 +336,16 @@ router.post('/forecast', protect, async (req, res) => {
       forecast,
     });
   } catch (error) {
-    return res.status(502).json({
-      message: error.message || 'Unable to reach AI forecast service.',
+    const timedOut = error.name === 'AbortError';
+    return res.status(timedOut ? 504 : 502).json({
+      message: timedOut
+        ? 'AI forecast timed out. The local forecast engines are still available.'
+        : 'Unable to reach AI forecast service.',
       configured: true,
       model,
     });
+  } finally {
+    clearTimeout(timer);
   }
 });
 

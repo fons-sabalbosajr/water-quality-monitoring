@@ -19,7 +19,8 @@
   --pub-header-bg: #07111f;
   --pub-sider-bg: #ffffff;
   min-height: 100vh;
-  font-family: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  min-height: 100dvh;
+  font-family: var(--app-font-family);
 }
 
 .pub-dark {
@@ -234,6 +235,7 @@
 .pub-content {
   background: var(--pub-surface-2) !important;
   min-height: calc(100vh - 64px);
+  min-height: calc(100dvh - 64px);
   overflow-y: auto;
   display: flex !important;
   flex-direction: column !important;

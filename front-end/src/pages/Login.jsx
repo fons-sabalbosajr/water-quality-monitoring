@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router';
 import { Alert, Button, Form, Input } from 'antd';
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/authStore';
 import { logActivity } from '../utils/appLog';
 import bagongLogo from '../assets/bagongpilipinaslogo.png';
 import embLogo from '../assets/emblogo.svg';
+import AuthThemeToggle from '../components/AuthThemeToggle';
 import './Login.css';
 
 const Login = () => {
@@ -35,6 +36,7 @@ const Login = () => {
       <div className="login-bg" aria-hidden="true" />
 
       <div className="login-card">
+        <AuthThemeToggle />
         {/* Brand with logos */}
         <div className="login-brand">
           <div className="brand-logos">

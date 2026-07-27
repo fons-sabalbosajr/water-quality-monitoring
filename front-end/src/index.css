@@ -9,7 +9,23 @@
 
 /* ── Theme CSS Variables ── */
 :root {
-  font-family: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  /* Single source of truth for typography.
+     'Inter' was referenced in index.css, Home.css, PublicDashboard.css and the
+     antd ConfigProvider, but was never loaded — no @font-face, no stylesheet
+     link, not an installed package. Every page therefore fell back to whatever
+     came next in its own stack, and those stacks differed between files, so
+     text rendered inconsistently from page to page. One token now drives all of
+     them. Inter stays first so it is picked up automatically if it is ever
+     installed or served locally. */
+  --app-font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --app-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Fluid base size: readable on a phone, comfortable on a large monitor,
+     without needing a breakpoint for every step in between. */
+  --app-font-size: clamp(13px, 0.55vw + 11.4px, 16px);
+
+  font-family: var(--app-font-family);
+  font-size: var(--app-font-size);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -68,16 +84,26 @@
 body {
   background: var(--bg-base);
   color: var(--text-primary);
+  font-family: var(--app-font-family);
+  /* 100vh on mobile browsers is the viewport *without* the collapsible address
+     bar, so a full-height layout overflowed by ~60-100px and produced a phantom
+     vertical scroll. dvh tracks the visible viewport; vh stays as a fallback. */
   min-height: 100vh;
+  min-height: 100dvh;
+  /* Wide tables, charts and the correlation grid must scroll inside their own
+     container — never drag the whole page sideways. */
+  overflow-x: hidden;
   transition: background 0.2s, color 0.2s;
 }
 
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
+  isolation: isolate;
 }
 
 .app-loading {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   gap: 0.75rem;
@@ -106,7 +132,7 @@ body {
 
 /* ── Branded splash for lazy dashboard load ── */
 .app-splash {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   background:
@@ -207,4 +233,304 @@ button {
 [data-theme='dark'] optgroup {
   background: var(--input-bg);
   color: var(--text-primary);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Shared layout guarantees
+   These apply app-wide so each page's stylesheet no longer has to restate
+   them (and no longer disagrees about them from page to page).
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Long station IDs, addresses and parameter names have no spaces to break on,
+   so a single cell used to push the table — and the page — wider than the
+   viewport. */
+h1, h2, h3, h4, h5, h6, p, span, td, th, li, label {
+  overflow-wrap: break-word;
+}
+
+/* antd inherits the font from its own token, but plain elements inside custom
+   markup (and portalled overlays) previously fell back to the UA default. */
+.ant-app,
+.ant-modal,
+.ant-drawer,
+.ant-table,
+.ant-select-dropdown,
+.ant-picker-dropdown,
+.ant-tooltip,
+.ant-popover,
+.swal2-container {
+  font-family: var(--app-font-family);
+}
+
+code, pre, kbd, samp {
+  font-family: var(--app-font-mono);
+}
+
+/* ── Tables ──
+   Confine horizontal scrolling to the table body and keep momentum scrolling
+   on touch devices. */
+.ant-table-wrapper {
+  max-width: 100%;
+}
+
+/* Fit columns to the container.
+   antd renders the inner <table> at `width: auto` when a `scroll.x` is set,
+   which makes a table narrower than its container hug its content and leave a
+   ragged empty gutter on the right. Stretching it to 100% lets the columns
+   share the available width — the spacing the columns were given is then used
+   for readability instead of being wasted. */
+.ant-table-wrapper .ant-table-container table {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Cells with `ellipsis` need a definite width to truncate against; without
+   this an over-long value still forces the column wider. */
+.ant-table-cell.ant-table-cell-ellipsis {
+  max-width: 0;
+}
+
+.ant-table-content,
+.ant-table-body {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────────────────
+   Tables previously used the OS default scrollbar: a 15-17px light-grey bar
+   that stayed light-grey inside dark cards, and ate enough width on horizontal
+   scroll to clip the last column. These tokens give every scrolling surface a
+   slim, theme-aware bar that only darkens on hover, so it reads as part of the
+   table rather than as browser chrome. */
+:root {
+  --scrollbar-size: 10px;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: rgba(68, 106, 203, 0.28);
+  --scrollbar-thumb-hover: rgba(68, 106, 203, 0.55);
+  --scrollbar-corner: transparent;
+}
+
+[data-theme='dark'] {
+  --scrollbar-thumb: rgba(148, 179, 233, 0.26);
+  --scrollbar-thumb-hover: rgba(148, 179, 233, 0.52);
+}
+
+/* Firefox / spec-standard. Applied globally so the page, drawers, modals and
+   dropdowns all match. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/* WebKit/Blink: `scrollbar-width: thin` is honoured in newer Chrome, but the
+   pseudo-elements give finer control and cover older versions. */
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  /* Inset border keeps the visible thumb slim while leaving a comfortable hit
+     area for the pointer. */
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--scrollbar-corner);
+}
+
+/* Table scroll areas: the horizontal bar sits directly under the last row, so
+   keep it subtle until the user interacts with the table. */
+.ant-table-body,
+.ant-table-content {
+  scrollbar-gutter: stable;
+}
+
+.ant-table-wrapper:hover .ant-table-body,
+.ant-table-wrapper:hover .ant-table-content {
+  --scrollbar-thumb: var(--scrollbar-thumb-hover);
+}
+
+/* A sticky/fixed column casts a shadow over the scrollbar area otherwise. */
+.ant-table-body::-webkit-scrollbar-track,
+.ant-table-content::-webkit-scrollbar-track {
+  background: var(--table-head);
+  border-radius: 999px;
+}
+
+/* Touch devices overlay their own scrollbars; reserving a gutter there just
+   wastes horizontal space that the columns need. */
+@media (pointer: coarse) {
+  .ant-table-body,
+  .ant-table-content {
+    scrollbar-gutter: auto;
+  }
+}
+
+/* Column headers wrapped mid-word on narrow screens, doubling row height and
+   making the header illegible. */
+.ant-table-thead > tr > th {
+  white-space: nowrap;
+}
+
+/* The pager overflowed its container on phones; let it wrap and centre. */
+.ant-table-pagination.ant-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 0.4rem;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .ant-table-pagination.ant-pagination {
+    justify-content: center;
+  }
+  /* The "x–y of z" summary is the first thing worth dropping when space is
+     tight — the page numbers matter more. */
+  .ant-pagination-total-text {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+/* ── Cards ──
+   In an auto-fit grid, cards are only the same height if they are told to
+   stretch. Without this, a card with one extra line of text was visibly taller
+   than its neighbours in the same row. */
+.ant-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.ant-card > .ant-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Grid and flex children default to min-width:auto, which refuses to shrink
+   below their content. That is the usual cause of a card overflowing its
+   column instead of its own content scrolling. */
+.ant-card,
+.ant-col,
+.ant-row > * {
+  min-width: 0;
+}
+
+/* ── Modals and overlays ── */
+.ant-modal {
+  max-width: calc(100vw - 2rem);
+}
+
+/* Modal shell: header and footer pinned, body scrolls.
+   Constraining the *content* rather than only the body means the footer can
+   never be pushed off-screen, however long the content is. */
+.ant-modal-content {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 4rem);
+}
+
+.ant-modal-header,
+.ant-modal-footer {
+  flex: 0 0 auto;
+}
+
+.ant-modal-body {
+  /* Tall modals (the station parameter editor especially) ran past the bottom
+     of the screen with the footer unreachable. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* A table inside a modal must not open a second scroll region — the modal body
+   already scrolls, and nesting the two makes the wheel behave unpredictably.
+   Tables that genuinely need their own vertical scroll opt back in by setting
+   an explicit `scroll.y`, which antd applies as an inline style. */
+.ant-modal-body .ant-table-wrapper .ant-table-body {
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 640px) {
+  .ant-modal {
+    max-width: calc(100vw - 1rem);
+    margin: 0.5rem auto;
+  }
+  .ant-modal-content {
+    max-height: calc(100dvh - 1.5rem);
+  }
+  /* Stacked full-width buttons beat a cramped row on a phone. */
+  .ant-modal-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .ant-modal-footer > .ant-btn {
+    flex: 1 1 8rem;
+    margin-inline-start: 0 !important;
+  }
+}
+
+/* SweetAlert renders outside the React root and was not covered by any of the
+   page stylesheets, so it kept the browser default font. */
+.swal2-popup {
+  font-family: var(--app-font-family);
+  font-size: 0.95rem;
+}
+
+/* Respect the OS "reduce motion" setting globally rather than per page. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── New Monitoring Year template modal ──
+   The Transfer's two panels are laid out fluid rather than at a fixed pixel
+   width, so the control fits inside the modal on tablets and phones instead of
+   overflowing it. */
+.new-year-transfer {
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+}
+
+.new-year-transfer .ant-transfer-list {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  /* Stack the panels and put the move buttons between them. */
+  .new-year-transfer {
+    flex-direction: column;
+  }
+  .new-year-transfer .ant-transfer-list {
+    width: 100% !important;
+    height: 220px !important;
+  }
+  .new-year-transfer .ant-transfer-operation {
+    flex-direction: row;
+    justify-content: center;
+    margin: 0.5rem 0;
+  }
 }

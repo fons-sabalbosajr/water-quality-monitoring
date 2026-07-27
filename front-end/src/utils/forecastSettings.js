@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import encryptedStorage from "./encryptedStorage";
+import encryptedStorage from "./encryptedStorage.js";
 
 export const FORECAST_MONTHS_KEY = "wqms_forecast_months";
 export const FORECAST_EVENT = "wqms:forecast-months";

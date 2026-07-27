@@ -7,9 +7,9 @@ import {
   useEffect,
   useMemo,
 } from "react";
-import { useNavigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
-import { useTheme } from "../context/ThemeContext";
+import { useNavigate } from "react-router";
+import { useAuth } from '../context/authStore';
+import { useTheme } from '../context/themeStore';
 import {
   AreaChart,
   Area,
@@ -1341,7 +1341,7 @@ const Home = () => {
   const handleLogout = () => {
     logActivity("Signed out", {}, user);
     logout();
-    navigate("/login");
+    navigate("/admin");
   };
 
   const pageTitle =
