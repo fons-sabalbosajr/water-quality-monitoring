@@ -151,16 +151,27 @@ jobs:
           $SSH "$VPS_USER@$VPS_HOST" \
             "APP_DIR='$APP_DIR' WEB_ROOT='$WEB_ROOT' PM2_NAME='$PM2_NAME' bash /tmp/remote-deploy.sh /tmp/wqms-release.tgz; rc=\$?; rm -f /tmp/wqms-release.tgz /tmp/remote-deploy.sh; exit \$rc"
 
+      # Responses are captured before matching: `curl | grep -q` under the
+      # runner's `pipefail` reports SIGPIPE as a failure once grep exits early
+      # (that false alarm failed the first production deploy's smoke test).
       - name: Smoke test public URL
         run: |
-          set -e
-          curl -fsS -m 20 "$PUBLIC_URL/api/health" | tee /dev/stderr | grep -q '"db":"connected"'
-          # Routes added in this release — prove the new API is the one serving.
-          curl -fsS -m 20 "$PUBLIC_URL/api/water/public/forecast-months" | grep -q '"months"'
-          # The page must reference the bundle this run built.
           expected="$(grep -o 'assets/index-[^"]*\.js' release/web/index.html | head -1)"
-          curl -fsS -m 20 "$PUBLIC_URL/welcome" | grep -q "$expected"
-          echo "Production is serving revision ${GITHUB_SHA::7} ($expected)."
+          for attempt in 1 2 3 4 5; do
+            health="$(curl -fsS -m 20 "$PUBLIC_URL/api/health" || true)"
+            # A route added in this release — proves the new API is serving.
+            months="$(curl -fsS -m 20 "$PUBLIC_URL/api/water/public/forecast-months" || true)"
+            # The page must reference the bundle this run built.
+            page="$(curl -fsS -m 20 "$PUBLIC_URL/welcome" || true)"
+            if [[ "$health" == *'"db":"connected"'* && "$months" == *'"months"'* && "$page" == *"$expected"* ]]; then
+              echo "Production is serving revision ${GITHUB_SHA::7} ($expected)."
+              exit 0
+            fi
+            echo "attempt $attempt: health=${health:0:80} months=${months:0:40} bundle-match=$([[ "$page" == *"$expected"* ]] && echo yes || echo no)"
+            sleep 6
+          done
+          echo "::error::Public smoke test failed after deploy — check $PUBLIC_URL"
+          exit 1
 
       - name: Remove SSH key
         if: always()
