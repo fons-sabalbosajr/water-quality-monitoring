@@ -1,0 +1,2 @@
+# Shell scripts run on Linux (CI runners, the VPS) and break with CRLF.
+*.sh text eol=lf

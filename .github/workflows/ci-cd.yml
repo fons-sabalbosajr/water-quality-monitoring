@@ -1,0 +1,167 @@
+# EMBR3-WQMS CI/CD
+#
+#   every push / pull request → test the API and the front-end, build the bundle
+#   push to main (or manual run) → deploy that exact bundle to the Hostinger VPS
+#
+# Deploy prerequisites (Settings → Secrets and variables → Actions):
+#   secrets  VPS_HOST          production server, e.g. 72.61.125.232
+#            VPS_USER          SSH user, e.g. root
+#            VPS_SSH_KEY       private key of the deploy key pair (ed25519)
+#            VPS_KNOWN_HOSTS   optional: `ssh-keyscan <host>` output to pin the host key
+#            VITE_CESIUM_ION_TOKEN  optional: enables Cesium terrain/buildings
+#   variables (optional overrides — defaults match DEPLOYMENT_HOSTINGER_KVM.md)
+#            APP_DIR  WEB_ROOT  PM2_NAME  VPS_PORT
+#            PUBLIC_URL  e.g. https://embr3-onlinesystems.cloud/water-quality-monitoring
+# See docs/CI_CD.md.
+
+name: CI/CD
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  server:
+    name: API — test & audit
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: server } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --no-fund
+      - run: npm test
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  frontend:
+    name: Front-end — test, lint & build
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: front-end } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: front-end/package-lock.json
+      - run: npm ci --no-fund
+      - run: npm test
+      - name: Lint (report only — 15 known pre-existing findings)
+        run: npx eslint src/
+        continue-on-error: true
+      # Report-only: most front-end advisories land in build tooling, and a new
+      # one should not block a hotfix deploy. The API's production-dependency
+      # audit above IS blocking.
+      - name: Audit dependencies (report only)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+      - name: Production build
+        run: npx vite build
+        env:
+          VITE_API_BASE_URL: /water-quality-monitoring/api
+          VITE_CESIUM_ION_TOKEN: ${{ secrets.VITE_CESIUM_ION_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: front-end/dist
+          retention-days: 7
+
+  deploy:
+    name: Deploy to production (Hostinger VPS)
+    needs: [server, frontend]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL || 'https://embr3-onlinesystems.cloud/water-quality-monitoring' }}/welcome
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+      APP_DIR: ${{ vars.APP_DIR || '/opt/embr3/water-quality-monitoring/app' }}
+      WEB_ROOT: ${{ vars.WEB_ROOT || '/var/www/embr3/water-quality-monitoring' }}
+      PM2_NAME: ${{ vars.PM2_NAME || 'embr3-wqms-api' }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://embr3-onlinesystems.cloud/water-quality-monitoring' }}
+    steps:
+      - name: Check deploy configuration
+        env:
+          HAS_KEY: ${{ secrets.VPS_SSH_KEY != '' }}
+        run: |
+          missing=()
+          [[ -n "$VPS_HOST" ]] || missing+=(VPS_HOST)
+          [[ -n "$VPS_USER" ]] || missing+=(VPS_USER)
+          [[ "$HAS_KEY" == "true" ]] || missing+=(VPS_SSH_KEY)
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing deploy secrets: ${missing[*]} — see docs/CI_CD.md"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: web-dist, path: release/web }
+
+      - name: Package release
+        run: |
+          mkdir -p release/server release/docs
+          rsync -a --exclude node_modules --exclude tests --exclude backups --exclude '.env*' server/ release/server/
+          cp front-end/docs/*.xlsx release/docs/
+          echo "${GITHUB_SHA}" > release/REVISION
+          tar -czf wqms-release.tgz -C release .
+          ls -lh wqms-release.tgz
+
+      - name: Configure SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [[ -n "$VPS_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" > ~/.ssh/known_hosts
+          fi
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Upload and deploy
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -p $VPS_PORT -o BatchMode=yes"
+          scp -i ~/.ssh/deploy_key -P "$VPS_PORT" -o BatchMode=yes \
+            wqms-release.tgz scripts/deploy/remote-deploy.sh "$VPS_USER@$VPS_HOST:/tmp/"
+          $SSH "$VPS_USER@$VPS_HOST" \
+            "APP_DIR='$APP_DIR' WEB_ROOT='$WEB_ROOT' PM2_NAME='$PM2_NAME' bash /tmp/remote-deploy.sh /tmp/wqms-release.tgz; rc=\$?; rm -f /tmp/wqms-release.tgz /tmp/remote-deploy.sh; exit \$rc"
+
+      - name: Smoke test public URL
+        run: |
+          set -e
+          curl -fsS -m 20 "$PUBLIC_URL/api/health" | tee /dev/stderr | grep -q '"db":"connected"'
+          # Routes added in this release — prove the new API is the one serving.
+          curl -fsS -m 20 "$PUBLIC_URL/api/water/public/forecast-months" | grep -q '"months"'
+          # The page must reference the bundle this run built.
+          expected="$(grep -o 'assets/index-[^"]*\.js' release/web/index.html | head -1)"
+          curl -fsS -m 20 "$PUBLIC_URL/welcome" | grep -q "$expected"
+          echo "Production is serving revision ${GITHUB_SHA::7} ($expected)."
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
