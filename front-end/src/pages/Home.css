@@ -2956,3 +2956,47 @@ select.observation-month-filter {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Observation Panel: animated scenes ─────────────────────────────────────
+   Each note shows an animated illustration of its main topic (see
+   components/ObservationScene). Items fade in with a short stagger whenever
+   the month filter changes — the list is keyed by month. */
+.observation-item.observation-item-scene {
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: start;
+  animation: observation-in 0.36s ease-out both;
+  animation-delay: calc(var(--obs-i, 0) * 45ms);
+}
+
+@keyframes observation-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.observation-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
+.observation-tags span {
+  padding: 0.08rem 0.4rem;
+  border-radius: 9999px;
+  background: color-mix(in srgb, #446ACB 10%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.6rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.observation-item.status-observed { border-left-color: #446ACB; }
+
+@media (max-width: 480px) {
+  .observation-item.observation-item-scene { grid-template-columns: 56px minmax(0, 1fr); }
+  .observation-item-scene .obs-scene { width: 56px; height: 42px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .observation-item.observation-item-scene { animation: none; }
+}

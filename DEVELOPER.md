@@ -4,7 +4,7 @@
 
 - Frontend: React 19, Vite 8, React Router 7, Recharts, Ant Design, Cesium.
 - Backend: Express 5, MongoDB via Mongoose, JWT auth, Nodemailer.
-- Data sources: `front-end/src/data/wqm2026.json` for the editable 2026 baseline and `front-end/docs/wqm2024.xlsx`, `wqm2025.xlsx`, `wqm2026.xlsx`, `wqm_stations.xlsx` for workbook-backed data.
+- Data sources: MongoDB `wqmdatasets` (one document per year, 2024–2026), imported from `front-end/docs/wqm2024.xlsx`, `wqm2025.xlsx`, `wqm2026.xlsx`; `wqm_stations.xlsx` for coordinates. `front-end/src/data/wqm2026.json` is only the offline fallback shown before the first sync.
 
 ## Important Paths
 
@@ -26,9 +26,26 @@ The app uses a shared published WQM year:
 
 1. Frontend asks `GET /api/water/visualization-year`.
 2. The backend reads `AppSetting` key `visualizationYear`.
-3. For 2026, the frontend uses local editable draft data.
-4. For 2024 and 2025, the frontend asks `GET /api/water/wqm/:year`.
+3. Every year (2024, 2025, 2026) is served from MongoDB by `GET /api/water/wqm/:year` (and its `/public/` twin).
+4. Each browser keeps an encrypted local copy stamped with the server's `importedAt`, renders it instantly, and revalidates it on mount/focus via the tiny `GET /api/water/public/wqm/:year/meta`; the full year is downloaded only when it changed. Edits (`PUT /api/water/wqm/:year`) therefore reach the public dashboard and every device.
 5. If the MongoDB dataset does not exist, the backend imports the matching workbook.
+
+App-wide settings are `AppSetting` documents: `visualizationYear`, `forecastMonths` (Forecast Horizon — `GET /api/water/public/forecast-months`, `PATCH /api/admin/settings/forecast-months`) and `veraSettings`.
+
+### Updating a year from a new workbook
+
+Replace `front-end/docs/wqm<year>.xlsx`, then from `server/`:
+
+```bash
+node scripts/importWqmYear.js 2026 --dry-run        # parse + report suspect values only
+node scripts/importWqmYear.js 2026 --force --write-bundle
+```
+
+`--force` replaces an existing year (a JSON backup is written to `server/backups/` first — that discards edits made in the app since the last import). `--write-bundle` also refreshes the offline fallback JSON. The parser handles monthly and quarterly sheets, two-row headers, titles above or below the header, and the "Date of Sampling" row.
+
+## VERA (assistant)
+
+`server/utils/vera/` + `server/routes/vera.js`, UI in `front-end/src/components/vera/` (ported from the ESWMP VERA). VERA's figures always come from `tools.js`, which computes them from MongoDB with the same guidelines (`wqm.js` ↔ `wqmData.js`) and forecast engines (↔ `Visualizations.jsx`) as the dashboards — keep those in sync. The model (Gemini via `GEMINI_API_KEY`; model chosen in Developer Manager → VERA Assistant, developer only) only picks tools and phrases results; without a model, `intents.js` routes the common questions to the same tools. Data changes are proposals: a signed, single-use, user-bound token is applied by `POST /api/vera/actions/confirm` only after the admin clicks Confirm, and is rejected if the value changed in the meantime.
 
 For production subpath deployment, the frontend API base changes to `/water-quality-monitoring/api`, and Nginx should proxy that path to the backend `/api` routes.
 

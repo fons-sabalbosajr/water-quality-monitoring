@@ -1,0 +1,209 @@
+/* Animated observation illustrations. Every animation is transform/opacity
+   (or stroke-dashoffset on a tiny path) so it stays on the compositor; all
+   motion stops under prefers-reduced-motion. */
+.obs-scene {
+  --obs-sky-top: #cfe8ff;
+  --obs-sky-bottom: #f1f8ff;
+  --obs-water: #3b82f6;
+  --obs-water-back: #60a5fa;
+  --obs-water-front: #2563eb;
+  --obs-land: #a3b18a;
+  --obs-sand: #e9d8a6;
+  --obs-ink: #334155;
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 0.6rem;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+  background: var(--obs-sky-bottom);
+}
+.obs-scene-md { width: 72px; height: 54px; }
+.obs-scene-sm { width: 56px; height: 42px; }
+.obs-scene svg { display: block; width: 100%; height: 100%; }
+
+[data-theme='dark'] .obs-scene {
+  --obs-sky-top: #0f2240;
+  --obs-sky-bottom: #1b3357;
+  --obs-water: #1d4ed8;
+  --obs-water-back: #2b5fb8;
+  --obs-water-front: #1e40af;
+  --obs-land: #4d5a3f;
+  --obs-sand: #6b5c34;
+  --obs-ink: #cbd5e1;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
+}
+
+.obs-scene.status-critical { box-shadow: inset 0 0 0 1.5px rgba(220, 38, 38, 0.55); }
+.obs-scene.status-watch { box-shadow: inset 0 0 0 1.5px rgba(245, 158, 11, 0.55); }
+.obs-scene.status-good { box-shadow: inset 0 0 0 1.5px rgba(22, 163, 74, 0.5); }
+
+.obs-sky-top { stop-color: var(--obs-sky-top); }
+.obs-sky-bottom { stop-color: var(--obs-sky-bottom); }
+
+/* ── Water ─────────────────────────────────────────────────────────────── */
+.obs-water-body { fill: var(--obs-water); }
+.obs-wave { will-change: transform; }
+.obs-wave-back { fill: var(--obs-water-back); animation: obs-wave 4.2s linear infinite; }
+.obs-wave-front { fill: var(--obs-water-front); opacity: 0.85; animation: obs-wave 2.8s linear infinite reverse; }
+.obs-water-dark { --obs-water: #1e293b; --obs-water-back: #334155; --obs-water-front: #0f172a; }
+.obs-water-brown { --obs-water: #8b6a3e; --obs-water-back: #a07d4b; --obs-water-front: #7a5a30; }
+@keyframes obs-wave { to { transform: translateX(-36px); } }
+
+.obs-cloud { fill: #ffffff; opacity: 0.85; animation: obs-drift 14s ease-in-out infinite alternate; }
+[data-theme='dark'] .obs-cloud { fill: #94a3b8; opacity: 0.35; }
+@keyframes obs-drift { from { transform: translateX(-4px); } to { transform: translateX(5px); } }
+
+.obs-land { fill: var(--obs-land); }
+.obs-sand { fill: var(--obs-sand); }
+
+/* Shared motions */
+.obs-bob { animation: obs-bob 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes obs-bob {
+  0%, 100% { transform: translateY(0) rotate(-4deg); }
+  50% { transform: translateY(-1.6px) rotate(5deg); }
+}
+
+.obs-ripple {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 0.8;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: obs-ripple 2.4s ease-out infinite;
+}
+@keyframes obs-ripple {
+  from { transform: scale(0.4); opacity: 0.95; }
+  to { transform: scale(2.6); opacity: 0; }
+}
+
+/* ── Solid waste ───────────────────────────────────────────────────────── */
+.obs-debris-bottle { fill: #38bdf8; stroke: #0369a1; stroke-width: 0.6; }
+.obs-debris-bag { fill: #f8fafc; stroke: #94a3b8; stroke-width: 0.6; }
+.obs-debris-can { fill: #f87171; stroke: #991b1b; stroke-width: 0.6; }
+.obs-debris-cap { fill: #f8fafc; opacity: 0.9; }
+
+/* ── Pollution ─────────────────────────────────────────────────────────── */
+.obs-sheen { animation: obs-sheen 3.6s linear infinite; }
+@keyframes obs-sheen { from { transform: translateX(-18px); } to { transform: translateX(18px); } }
+.obs-bubble {
+  fill: none;
+  stroke: rgba(226, 232, 240, 0.85);
+  stroke-width: 0.7;
+  animation: obs-rise 2.2s ease-in infinite;
+}
+@keyframes obs-rise {
+  0% { transform: translateY(0); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translateY(-13px); opacity: 0; }
+}
+.obs-alert { fill: #dc2626; transform-box: fill-box; transform-origin: center; animation: obs-pulse 1.4s ease-in-out infinite; }
+.obs-alert-mark { fill: #fff; }
+@keyframes obs-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.12); opacity: 0.75; }
+}
+
+/* ── Discharge ─────────────────────────────────────────────────────────── */
+.obs-pipe { fill: #64748b; }
+.obs-flow {
+  fill: none;
+  stroke: #7c6a4a;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 3 3;
+  animation: obs-flow 0.6s linear infinite;
+}
+@keyframes obs-flow { to { stroke-dashoffset: -6; } }
+
+/* ── Turbid water ──────────────────────────────────────────────────────── */
+.obs-swirl { animation: obs-spin 5s linear infinite; }
+.obs-swirl-rev { animation-direction: reverse; animation-duration: 6.5s; }
+.obs-swirl-line { fill: none; stroke: rgba(253, 230, 138, 0.75); stroke-width: 0.9; stroke-linecap: round; }
+.obs-silt { fill: #fde68a; animation: obs-silt 3s ease-in-out infinite; }
+@keyframes obs-spin { to { transform: rotate(360deg); } }
+@keyframes obs-silt {
+  0%, 100% { transform: translate(0, 0); opacity: 0.4; }
+  50% { transform: translate(3px, -2px); opacity: 1; }
+}
+
+/* ── Construction ──────────────────────────────────────────────────────── */
+.obs-machine { fill: #f59e0b; stroke: #92400e; stroke-width: 0.6; }
+.obs-track { fill: #334155; }
+.obs-arm { animation: obs-dig 2.6s ease-in-out infinite; }
+.obs-arm-line { fill: none; stroke: #b45309; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes obs-dig {
+  0%, 100% { transform: rotate(-6deg); }
+  50% { transform: rotate(10deg); }
+}
+.obs-dust { fill: #cbd5e1; animation: obs-rise 2s ease-out infinite; }
+
+/* ── Aquatic plants ────────────────────────────────────────────────────── */
+.obs-sway { animation: obs-sway 3s ease-in-out infinite; }
+.obs-leaf { fill: #16a34a; }
+.obs-leaf-light { fill: #4ade80; }
+.obs-flower { fill: #c084fc; }
+@keyframes obs-sway {
+  0%, 100% { transform: rotate(-5deg) translateY(0); }
+  50% { transform: rotate(5deg) translateY(-1px); }
+}
+
+/* ── Tide ──────────────────────────────────────────────────────────────── */
+.obs-tide-rise { animation: obs-tide-rise 3.4s ease-in-out infinite; }
+.obs-tide-fall { animation: obs-tide-fall 3.4s ease-in-out infinite; }
+@keyframes obs-tide-rise {
+  0%, 100% { transform: translateY(3px); }
+  50% { transform: translateY(-1.5px); }
+}
+@keyframes obs-tide-fall {
+  0%, 100% { transform: translateY(-2px); }
+  50% { transform: translateY(2.5px); }
+}
+.obs-arrow-line { fill: none; stroke: #0ea5e9; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.obs-arrow-up { animation: obs-arrow-up 1.6s ease-in-out infinite; }
+.obs-arrow-down { animation: obs-arrow-down 1.6s ease-in-out infinite; }
+@keyframes obs-arrow-up { 0%, 100% { transform: translateY(1px); opacity: 0.6; } 50% { transform: translateY(-2px); opacity: 1; } }
+@keyframes obs-arrow-down { 0%, 100% { transform: translateY(-1px); opacity: 0.6; } 50% { transform: translateY(2px); opacity: 1; } }
+.obs-gauge { fill: none; stroke: var(--obs-ink); stroke-width: 1; opacity: 0.5; }
+
+/* ── Boats ─────────────────────────────────────────────────────────────── */
+.obs-boat { animation: obs-rock 3s ease-in-out infinite; }
+.obs-hull { fill: #b45309; }
+.obs-cabin { fill: #f8fafc; }
+.obs-sail { fill: #fef3c7; }
+.obs-mast { stroke: #78350f; stroke-width: 0.8; }
+.obs-wake { fill: none; stroke: rgba(255, 255, 255, 0.8); stroke-width: 0.8; stroke-linecap: round; animation: obs-fade 1.8s ease-in-out infinite; }
+@keyframes obs-rock {
+  0%, 100% { transform: translateY(0) rotate(-3deg); }
+  50% { transform: translateY(-1.4px) rotate(3deg); }
+}
+@keyframes obs-fade { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.9; } }
+
+/* ── Bathing ───────────────────────────────────────────────────────────── */
+.obs-sun { fill: #fbbf24; }
+.obs-ray { stroke: #fbbf24; stroke-width: 1.2; stroke-linecap: round; }
+.obs-sun-rays { animation: obs-spin 16s linear infinite; }
+.obs-head { fill: #f2c9a0; stroke: #7c5a3a; stroke-width: 0.5; }
+.obs-arm-stroke { fill: none; stroke: #f2c9a0; stroke-width: 1.6; stroke-linecap: round; }
+.obs-swimmer { animation: obs-swim 2.2s ease-in-out infinite; }
+@keyframes obs-swim {
+  0%, 100% { transform: translateX(-2px) translateY(0); }
+  50% { transform: translateX(2px) translateY(-1px); }
+}
+
+/* ── Clear & calm ──────────────────────────────────────────────────────── */
+.obs-fish-body { fill: #f97316; }
+.obs-fish { animation: obs-jump 3.2s ease-in-out infinite; }
+@keyframes obs-jump {
+  0%, 55%, 100% { transform: translate(24px, 40px) rotate(-40deg); opacity: 0; }
+  60% { opacity: 1; }
+  72% { transform: translate(34px, 26px) rotate(0deg); opacity: 1; }
+  85% { transform: translate(44px, 38px) rotate(40deg); opacity: 1; }
+  90% { opacity: 0; }
+}
+.obs-sparkle { stroke: #fff; stroke-width: 0.9; stroke-linecap: round; transform-box: fill-box; transform-origin: center; animation: obs-twinkle 2s ease-in-out infinite; }
+@keyframes obs-twinkle { 0%, 100% { opacity: 0; transform: scale(0.4); } 50% { opacity: 1; transform: scale(1); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .obs-scene * { animation: none !important; }
+}

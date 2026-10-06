@@ -142,6 +142,7 @@ export const resolveWaterbodyMapLocations = (
         station: stationName,
         stationData: station,
         markerNumber: station.stnNo ?? index + 1,
+        periodLabels: waterbody.periodLabels || null,
         waterbodyName: displayName,
         waterbodyRiver: displayName,
         waterbodyLoc: '',

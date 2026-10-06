@@ -31,3 +31,6 @@ Thumbs.db
 .vscode/
 .idea/
 
+
+# Pre-import MongoDB snapshots written by scripts/importWqmYear.js
+backups/

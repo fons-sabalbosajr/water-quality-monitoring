@@ -719,3 +719,24 @@
     white-space: normal;
   }
 }
+
+/* Observation cards with animated scenes (components/ObservationScene). */
+.wb-observation-card.wb-observation-card-scene {
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: start;
+  border-left: 3px solid #446ACB;
+}
+.wb-observation-card-scene.status-critical { border-left-color: #dc2626; }
+.wb-observation-card-scene.status-watch { border-left-color: #f59e0b; }
+.wb-observation-card-scene.status-good { border-left-color: #16a34a; }
+.wb-observation-label {
+  display: inline-flex;
+  margin-bottom: 0.3rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.64rem;
+  font-weight: 600;
+}

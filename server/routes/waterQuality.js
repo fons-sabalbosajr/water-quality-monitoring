@@ -8,11 +8,24 @@ const WqmDataset = require('../models/WqmDataset');
 const AppSetting = require('../models/AppSetting');
 const { parseWorkbook } = require('../utils/wqmWorkbook');
 const { validateSheets } = require('../utils/validateSheets');
+const { FORECAST_MONTHS_KEY, clampForecastMonths } = require('../utils/forecastSettings');
 
-const IMPORTED_WQM_YEARS = [2024, 2025];
+// Every year below is stored in MongoDB (wqmdatasets). 2026 used to live only
+// in each browser's local storage, so admin edits never reached the public
+// dashboard or other devices; it is now served and saved like the archives.
+const IMPORTED_WQM_YEARS = [2024, 2025, 2026];
 const WQM_PUBLISHED_YEARS = [2024, 2025, 2026];
 const PUBLISHED_WQM_YEAR_KEY = 'visualizationYear';
 const DEFAULT_PUBLISHED_YEAR = 2026;
+// The live (currently encoded) year keeps raw worksheet names as keys — the
+// front-end province map and saved station coordinates use them — and keeps
+// parameters with no readings yet so they stay available for data entry.
+const LIVE_WQM_YEAR = 2026;
+const YEAR_LIST = IMPORTED_WQM_YEARS.join(', ');
+
+const workbookOptionsFor = (year) => (
+  year === LIVE_WQM_YEAR ? { preserveSheetNames: true, keepEmptyParams: true } : {}
+);
 
 const getGeminiKey = () => process.env.GEMINI_API_KEY
   || process.env.GEMINI_KEY
@@ -55,7 +68,7 @@ const importWqmYear = async (year) => {
     error.status = 404;
     throw error;
   }
-  const sheets = await parseWorkbook(sourceFile, year);
+  const sheets = await parseWorkbook(sourceFile, year, workbookOptionsFor(year));
   if (!sheets.length) throw new Error(`No WQM sheets parsed for ${year}.`);
   return WqmDataset.findOneAndUpdate(
     { year },
@@ -80,6 +93,20 @@ router.get('/public/visualization-year', async (req, res, next) => {
   try {
     res.set('Cache-Control', 'public, max-age=60');
     return res.json({ year: await readPublishedYear() });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// @route   GET /api/water/public/forecast-months
+// @desc    Admin-configured forecast horizon, read by every dashboard (public
+//          and signed-in) so the setting applies on all devices.
+// @access  Public
+router.get('/public/forecast-months', async (req, res, next) => {
+  try {
+    const setting = await AppSetting.findOne({ key: FORECAST_MONTHS_KEY }).select('value').lean();
+    res.set('Cache-Control', 'public, max-age=60');
+    return res.json({ months: clampForecastMonths(setting?.value) });
   } catch (error) {
     return next(error);
   }
@@ -127,16 +154,37 @@ const sendYearDataset = async (req, res, year) => {
   });
 };
 
+// @route   GET /api/water/public/wqm/:year/meta
+// @desc    Version stamp of a stored year. Clients poll this (a few bytes) and
+//          only download the multi-MB year when importedAt has changed, so
+//          edits saved by an admin reach every browser without a hard reload.
+// @access  Public
+router.get('/public/wqm/:year/meta', async (req, res, next) => {
+  const year = parseYear(req.params.year);
+  if (!IMPORTED_WQM_YEARS.includes(year)) {
+    return res.status(400).json({ message: `Only WQM years ${YEAR_LIST} are available.` });
+  }
+  try {
+    const meta = await WqmDataset.findOne({ year }).select('importedAt').lean();
+    res.set('Cache-Control', 'no-cache');
+    if (!meta) return res.status(404).json({ message: `WQM ${year} is not stored yet.` });
+    return res.json({ year, importedAt: meta.importedAt });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 // @route   GET /api/water/public/wqm/:year
 // @access  Public — read-only archive for the public dashboard
 router.get('/public/wqm/:year', async (req, res, next) => {
   const year = parseYear(req.params.year);
   if (!IMPORTED_WQM_YEARS.includes(year)) {
-    return res.status(400).json({ message: 'Only imported WQM years 2024 and 2025 are available.' });
+    return res.status(400).json({ message: `Only WQM years ${YEAR_LIST} are available.` });
   }
   try {
     return await sendYearDataset(req, res, year);
   } catch (error) {
+    if (error.status === 404) return res.status(404).json({ message: error.message });
     return next(error);
   }
 });
@@ -144,12 +192,13 @@ router.get('/public/wqm/:year', async (req, res, next) => {
 router.get('/wqm/:year', protect, async (req, res, next) => {
   const year = parseYear(req.params.year);
   if (!IMPORTED_WQM_YEARS.includes(year)) {
-    return res.status(400).json({ message: 'Only imported WQM years 2024 and 2025 are available from MongoDB.' });
+    return res.status(400).json({ message: `Only WQM years ${YEAR_LIST} are available from MongoDB.` });
   }
 
   try {
     return await sendYearDataset(req, res, year);
   } catch (error) {
+    if (error.status === 404) return res.status(404).json({ message: error.message });
     return next(error);
   }
 });
@@ -160,7 +209,7 @@ router.get('/wqm/:year', protect, async (req, res, next) => {
 router.post('/wqm/:year/import', protect, adminProtect, async (req, res, next) => {
   const year = parseYear(req.params.year);
   if (!IMPORTED_WQM_YEARS.includes(year)) {
-    return res.status(400).json({ message: 'Only WQM years 2024 and 2025 can be imported by this endpoint.' });
+    return res.status(400).json({ message: `Only WQM years ${YEAR_LIST} can be imported by this endpoint.` });
   }
 
   try {
@@ -183,7 +232,7 @@ router.post('/wqm/:year/import', protect, adminProtect, async (req, res, next) =
 router.put('/wqm/:year', protect, adminProtect, async (req, res, next) => {
   const year = parseYear(req.params.year);
   if (!IMPORTED_WQM_YEARS.includes(year)) {
-    return res.status(400).json({ message: `Only WQM years ${IMPORTED_WQM_YEARS.join(' and ')} can be updated via this endpoint.` });
+    return res.status(400).json({ message: `Only WQM years ${YEAR_LIST} can be updated via this endpoint.` });
   }
 
   const { sheets } = req.body || {};

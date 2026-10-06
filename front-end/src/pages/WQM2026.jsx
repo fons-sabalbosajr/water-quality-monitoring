@@ -11,7 +11,6 @@ import {
 } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import { useAuth } from '../context/authStore';
-import api from '../api/axios';
 import { logActivity } from '../utils/appLog';
 import { toastSaved } from '../utils/swal';
 import encryptedStorage from '../utils/encryptedStorage';
@@ -25,9 +24,9 @@ import {
   getParamUnit, normalizeParamName, OBSERVATION_PARAM,
 } from '../utils/wqmData';
 import {
-  INITIAL_SHEETS, WATERBODY_PROVINCE, getStoredWqmSheets,
-  resetStoredWqmSheets, saveYearSheetsLocal,
+  WATERBODY_PROVINCE, WQM_DRAFTS_EVENT, getStoredWqmSheets, saveYearSheetsLocal,
   isCustomTabularYear, removeTabularYear,
+  revalidateYear, refetchYearFromServer, saveYearToServer,
 } from '../utils/wqmSheets';
 import './WQM2026.css';
 
@@ -40,24 +39,15 @@ const getYearDraftKey = (year) => `wqm_${year}_drafts`;
 // station parameter editor table.
 const DATE_ROW_KEY = '__date_of_sampling__';
 
-// 2026 (bundled active dataset) and any admin-created custom year are stored
-// entirely in encrypted local storage. Only the legacy 2024/2025 archives are
-// fetched from MongoDB.
-const isLocalYear = (year) => year === 2026 || isCustomTabularYear(year);
+// Admin-created custom years (2027+) live only in encrypted local storage.
+// 2024–2026 are stored in MongoDB; this browser keeps a synced local copy so
+// the table renders instantly and every save is sent to the server. (2026 used
+// to be local-only, so edits never reached the public dashboard.)
+const isLocalYear = (year) => isCustomTabularYear(year);
 
-const getStoredSheetsForYear = (year, fallback = INITIAL_SHEETS) => {
+const getStoredSheetsForYear = (year) => {
   if (year === 2026) return getStoredWqmSheets();
-  const stored = encryptedStorage.getItem(getYearDraftKey(year));
-  if (stored) return stored;
-  return isCustomTabularYear(year) ? [] : clone(fallback);
-};
-
-const resetStoredSheetsForYear = (year) => {
-  if (year === 2026) {
-    resetStoredWqmSheets();
-    return;
-  }
-  encryptedStorage.removeItem(getYearDraftKey(year));
+  return encryptedStorage.getItem(getYearDraftKey(year)) || [];
 };
 
 const getDisplayParamName = (param) => (normalizeParamName(param) === OBSERVATION_PARAM ? 'Observations' : param);
@@ -85,10 +75,8 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   const { user } = useAuth();
   const canManageData = ['admin', 'developer'].includes(user?.role);
   const canEditYear = canManageData;
-  const hasStoredSheetsForYear = (year) => Boolean(encryptedStorage.getItem(getYearDraftKey(year)));
-  const [sheets, setSheets] = useState(() => (isLocalYear(year) ? getStoredSheetsForYear(year) : []));
-  const [sourceSheets, setSourceSheets] = useState(() => (year === 2026 ? clone(INITIAL_SHEETS) : []));
-  const [loading, setLoading] = useState(!isLocalYear(year));
+  const [sheets, setSheets] = useState(() => getStoredSheetsForYear(year));
+  const [loading, setLoading] = useState(() => !getStoredSheetsForYear(year).length);
   const [activeTab, setActiveTab] = useState('');
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
@@ -124,54 +112,60 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
         setMessage('');
       }
     });
-    const hasDraft = hasStoredSheetsForYear(year);
+    const applySheets = (next, nextMessage) => {
+      sheetsRef.current = next;
+      setSheets(next);
+      // Keep the open waterbody when a background sync replaces the data.
+      setActiveTab((current) => (next.some((item) => item.key === current) ? current : (next[0]?.key || '')));
+      setMessage(nextMessage);
+      setLoading(false);
+    };
 
     if (isLocalYear(year)) {
-      const fallbackSource = year === 2026 ? INITIAL_SHEETS : [];
-      const localSheets = getStoredSheetsForYear(year, fallbackSource);
       queueMicrotask(() => {
-        if (!cancelled) {
-          setMessage(
-            year === 2026
-              ? (hasDraft ? `WQM ${year} loaded from encrypted local draft.` : `WQM ${year} loaded from the bundled source dataset.`)
-              : `Monitoring year ${year} loaded from encrypted local draft.`,
-          );
-          setLoading(false);
-          setSourceSheets(year === 2026 ? clone(INITIAL_SHEETS) : clone(localSheets));
-          setSheets(localSheets);
-          setActiveTab(localSheets[0]?.key || '');
-        }
+        if (!cancelled) applySheets(getStoredSheetsForYear(year), `Monitoring year ${year} loaded from encrypted local draft.`);
       });
-      return undefined;
+      return () => { cancelled = true; };
     }
 
+    // Stored years: show this browser's copy at once, then sync with MongoDB.
+    const cached = getStoredSheetsForYear(year);
     queueMicrotask(() => {
-      if (!cancelled) {
+      if (cancelled) return;
+      if (cached.length) {
+        applySheets(cached, `Checking MongoDB for WQM ${year} updates…`);
+      } else {
         setLoading(true);
         setSheets([]);
         setActiveTab('');
       }
     });
-    api.get(`/water/wqm/${year}`)
-      .then((response) => {
-        if (cancelled) return;
-        const loadedSheets = response.data?.sheets || [];
-        const nextHasDraft = hasStoredSheetsForYear(year);
-        const draftSheets = getStoredSheetsForYear(year, loadedSheets);
-        setSourceSheets(clone(loadedSheets));
-        setSheets(draftSheets);
-        setActiveTab(draftSheets[0]?.key || '');
-        setMessage(nextHasDraft ? `WQM ${year} loaded from encrypted local draft.` : `WQM ${year} loaded from MongoDB.`);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setMessage(error.response?.data?.message || `Unable to load WQM ${year} from MongoDB.`);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    revalidateYear(year, { force: true }).then((status) => {
+      if (cancelled) return;
+      applySheets(
+        getStoredSheetsForYear(year),
+        status === 'offline'
+          ? `MongoDB is unreachable — showing the copy of WQM ${year} saved in this browser.`
+          : `WQM ${year} loaded from MongoDB.`,
+      );
+    });
 
     return () => { cancelled = true; };
+  }, [year]);
+
+  // A focus/background sync elsewhere can replace this year's local copy.
+  // Re-read it so the next save is not computed from (and does not overwrite
+  // the server with) stale data. Only server syncs carry `detail.year`.
+  useEffect(() => {
+    if (isLocalYear(year)) return undefined;
+    const onSynced = (event) => {
+      if (event.detail?.year !== year) return;
+      const next = getStoredSheetsForYear(year);
+      sheetsRef.current = next;
+      setSheets(next);
+    };
+    window.addEventListener(WQM_DRAFTS_EVENT, onSynced);
+    return () => window.removeEventListener(WQM_DRAFTS_EVENT, onSynced);
   }, [year]);
 
   const sheet = sheets.find((item) => item.key === activeTab) || sheets[0];
@@ -244,24 +238,28 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
   // Searching or deleting can shrink the result set below the current page.
   useEffect(() => { onTotalChange(stationRows.length); }, [stationRows.length, onTotalChange]);
 
-  // Persist a new sheet set: local encrypted draft always, MongoDB for the
-  // 2024/2025 archives. Kept separate from setState so it is only ever run once
-  // per user action.
+  // Persist a new sheet set: local encrypted copy always, MongoDB for every
+  // stored year (2024–2026). Kept separate from setState so it is only ever
+  // run once per user action.
   const persistSheets = useCallback((next, successMessage) => {
-    // Always cache the new data locally AND broadcast the draft event so every
-    // page (Dashboard, Visualizations, Waterbody Profiles, Public Dashboard)
-    // reflects the update immediately.
+    // Cache locally AND broadcast the draft event so every page in this
+    // browser (Dashboard, Visualizations, Waterbody Profiles) updates at once.
     saveYearSheetsLocal(year, next);
     if (successMessage) setMessage(successMessage);
-    // 2024/2025 are additionally persisted to MongoDB for durability.
+    // MongoDB is what other devices and the public dashboard read.
     if (!isLocalYear(year)) {
       setSaving(true);
-      api.put(`/water/wqm/${year}`, { sheets: next })
+      saveYearToServer(year, next)
         .then(() => setMessage(successMessage || `WQM ${year} saved to MongoDB.`))
-        .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`))
+        .catch((error) => setMessage(
+          error.response?.data?.message
+            || `Failed to save WQM ${year} to MongoDB. The change is kept in this browser — save again to retry.`,
+        ))
         .finally(() => setSaving(false));
     }
   }, [year]);
+
+  const savedNote = isLocalYear(year) ? '' : ` and WQM ${year} saved to MongoDB`;
 
   /**
    * React may invoke a state updater more than once (StrictMode does so
@@ -334,9 +332,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
           ? item.stations.map((station) => (station.stnNo === editingStation.stnNo ? normalizedStation : station))
           : [...item.stations, normalizedStation],
       };
-    }), editingStation
-      ? (year === 2026 ? 'Station record updated.' : `Station updated and WQM ${year} saved to MongoDB.`)
-      : (year === 2026 ? 'Station record added.' : `Station added and WQM ${year} saved to MongoDB.`), {
+    }), `Station ${editingStation ? 'updated' : 'added'}${savedNote}.`, {
       action: editingStation ? 'Updated station record' : 'Added station record',
       details: { waterbody: sheet.name, station: normalizedStation.stnId },
     });
@@ -362,32 +358,34 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
       item.key === sheet.key
         ? { ...item, stations: item.stations.filter((entry) => entry.stnNo !== station.stnNo) }
         : item
-    )), year === 2026 ? 'Station removed from local draft.' : `Station removed and WQM ${year} saved to MongoDB.`, {
+    )), `Station removed${savedNote}.`, {
       action: 'Deleted station record',
       details: { waterbody: sheet.name, station: station.stnId },
     });
-  }, [sheet, canEditYear, year, updateSheets]);
+  }, [sheet, canEditYear, updateSheets, savedNote]);
 
-  const resetDrafts = () => {
-    if (!canEditYear || year !== 2026) return;
-    resetStoredSheetsForYear(year);
-    setSheets(clone(sourceSheets));
-    setActiveTab(sourceSheets[0]?.key || '');
-    setSearch('');
-    setMessage(`Local ${year} draft reset to source dataset.`);
-    logActivity('Reset tabular draft data', { scope: `WQM ${year}` }, user);
+  // Discard this browser's unsaved changes and reload the MongoDB copy.
+  const reloadFromServer = () => {
+    if (!canEditYear || isLocalYear(year)) return;
+    setSaving(true);
+    refetchYearFromServer(year)
+      .then((fresh) => {
+        sheetsRef.current = fresh;
+        setSheets(fresh);
+        setActiveTab((current) => (fresh.some((item) => item.key === current) ? current : (fresh[0]?.key || '')));
+        setSearch('');
+        setMessage(`WQM ${year} reloaded from MongoDB.`);
+        logActivity('Reloaded tabular data from server', { scope: `WQM ${year}` }, user);
+      })
+      .catch((error) => setMessage(error.response?.data?.message || error.message || `Unable to reload WQM ${year}.`))
+      .finally(() => setSaving(false));
   };
 
   const deleteWaterbody = () => {
     if (!sheet || !canEditYear) return;
     const next = sheets.filter((s) => s.key !== sheet.key);
-    saveYearSheetsLocal(year, next);
-    setMessage(`"${sheet.name}" removed from the WQM ${year} dataset.`);
-    if (!isLocalYear(year)) {
-      api.put(`/water/wqm/${year}`, { sheets: next })
-        .then(() => setMessage(`"${sheet.name}" removed and WQM ${year} saved to MongoDB.`))
-        .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`));
-    }
+    sheetsRef.current = next;
+    persistSheets(next, `"${sheet.name}" removed${savedNote}.`);
     setSheets(next);
     setActiveTab(next[0]?.key || '');
     setSearch('');
@@ -424,13 +422,8 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
       stations: [],
     };
     const next = [...sheets, newSheet];
-    saveYearSheetsLocal(year, next);
-    setMessage(`"${newSheet.name}" added to WQM ${year} dataset.`);
-    if (!isLocalYear(year)) {
-      api.put(`/water/wqm/${year}`, { sheets: next })
-        .then(() => setMessage(`"${newSheet.name}" added and WQM ${year} saved to MongoDB.`))
-        .catch((error) => setMessage(error.response?.data?.message || `Failed to save WQM ${year} to MongoDB.`));
-    }
+    sheetsRef.current = next;
+    persistSheets(next, `"${newSheet.name}" added${savedNote}.`);
     setSheets(next);
     setActiveTab(derivedKey);
     setWaterbodyModalOpen(false);
@@ -535,8 +528,8 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
             <>
               <Button size="small" type="primary" icon={<EditOutlined />} title="Edit station" aria-label="Edit station" onClick={() => openStationModal('edit', row.station)} />
               <Popconfirm
-                title="Delete station draft?"
-                description={`Remove ${row.stnId} from the encrypted local draft.`}
+                title="Delete station?"
+                description={isLocalYear(year) ? `Remove ${row.stnId} from the encrypted local draft.` : `Remove ${row.stnId} and save WQM ${year} to MongoDB.`}
                 okText="Delete"
                 cancelText="Cancel"
                 onConfirm={() => deleteStation(row.station)}
@@ -548,7 +541,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
         </Space>
       ),
     },
-  ], [canEditYear, openStationModal, deleteStation]);
+  ], [canEditYear, openStationModal, deleteStation, year]);
 
   const classLabel = sheet?.classInfo?.match(/CLASS\s+(\S+)/)?.[1] || '';
   const visibleMonthIndices = useMemo(() => {
@@ -735,7 +728,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
                 {classLabel && <Tag color="blue">Class {classLabel}</Tag>}
                 <Tag color="green">{sheet.stations.length} stations</Tag>
                 <Tag color="default">{params.length} parameters</Tag>
-                {canEditYear ? <Tag color="gold">{year === 2026 ? (user?.role === 'developer' ? 'Developer CRUD' : 'Admin CRUD') : (user?.role === 'developer' ? 'Developer — MongoDB' : 'Admin — MongoDB')}</Tag> : <Tag>Read only</Tag>}
+                {canEditYear ? <Tag color="gold">{isLocalYear(year) ? (user?.role === 'developer' ? 'Developer CRUD' : 'Admin CRUD') : (user?.role === 'developer' ? 'Developer — MongoDB' : 'Admin — MongoDB')}</Tag> : <Tag>Read only</Tag>}
               </Space>
             </div>
             <Space>
@@ -751,20 +744,20 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
               {canEditYear && (
                 <>
                   <Button type="primary" icon={<PlusOutlined />} onClick={addStation}>Add Station</Button>
-                  {year === 2026 && (
+                  {!isLocalYear(year) && (
                     <Popconfirm
-                      title="Reset local draft?"
-                      description={`This restores the original WQM ${year} source data.`}
-                      okText="Reset"
+                      title="Reload from server?"
+                      description={`Discards changes in this browser that were not saved, and reloads WQM ${year} from MongoDB.`}
+                      okText="Reload"
                       cancelText="Cancel"
-                      onConfirm={resetDrafts}
+                      onConfirm={reloadFromServer}
                     >
-                      <Button icon={<ReloadOutlined />}>Reset Draft</Button>
+                      <Button icon={<ReloadOutlined />}>Reload from Server</Button>
                     </Popconfirm>
                   )}
                   <Popconfirm
                     title={`Delete "${sheet?.name}"?`}
-                    description={year === 2026 ? 'This removes the waterbody from the local draft.' : `This removes the waterbody and saves WQM ${year} to MongoDB.`}
+                    description={isLocalYear(year) ? 'This removes the waterbody from the local draft.' : `This removes the waterbody and saves WQM ${year} to MongoDB.`}
                     okText="Yes, delete"
                     okButtonProps={{ danger: true }}
                     cancelText="Cancel"
@@ -797,9 +790,7 @@ const WQM2026 = ({ year = 2026, onYearDeleted }) => {
 
           {(message || !canManageData) && (
             <div className="wqm-ant-note">
-              {message || (year === 2026
-                ? 'Read-only mode. CRUD controls are restricted to administrators and developers.'
-                : 'Read-only mode. Only administrators and developers can edit this dataset.')}
+              {message || 'Read-only mode. Only administrators and developers can edit this dataset.'}
             </div>
           )}
           <Table

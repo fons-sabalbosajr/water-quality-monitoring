@@ -1,0 +1,156 @@
+/* "Meet VERA" landing section — the ESWMP landing page's VERA section
+   (.lp-vera-*) re-namespaced to .wv-*. A distinct dark AI identity in both
+   themes, as on the ESWMP landing page. */
+.welcome-vera-section {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(3rem, 7vw, 5.5rem) clamp(1rem, 3vw, 2rem);
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(19, 194, 194, 0.18), transparent 60%),
+    radial-gradient(900px 500px at 100% 110%, rgba(82, 196, 26, 0.14), transparent 55%),
+    linear-gradient(135deg, #0b1f38 0%, #0f2745 55%, #123b52 100%);
+  color: #eaf2fb;
+  isolation: isolate;
+  scroll-margin-top: 72px;
+}
+.wv-bg { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.wv-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-auto-rows: 1fr;
+  gap: clamp(26px, 5vw, 64px);
+  padding: clamp(30px, 7vh, 80px) clamp(24px, 8vw, 120px);
+}
+.wv-grid-cell {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  justify-self: center;
+  align-self: center;
+  opacity: 0.08;
+  background: linear-gradient(135deg, #4096ff, #2dd6d6);
+  box-shadow: 0 0 8px rgba(45, 214, 214, 0.5);
+  will-change: opacity, transform;
+}
+.wv-orb { position: absolute; border-radius: 50%; filter: blur(60px); opacity: 0.5; }
+.wv-orb-1 { width: 320px; height: 320px; top: -80px; left: -60px; background: rgba(22, 119, 255, 0.5); }
+.wv-orb-2 { width: 380px; height: 380px; bottom: -120px; right: -80px; background: rgba(82, 196, 26, 0.4); }
+
+.wv-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.25fr);
+  gap: clamp(28px, 5vw, 64px);
+  align-items: center;
+}
+
+.wv-intro { min-width: 0; will-change: transform, opacity; }
+.wv-avatar-wrap {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+.wv-avatar-orb {
+  position: relative;
+  z-index: 2;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 40%, rgba(19, 194, 194, 0.28), rgba(15, 39, 69, 0.6));
+  box-shadow: 0 0 0 1px rgba(45, 214, 214, 0.35), 0 10px 30px rgba(0, 0, 0, 0.35);
+  will-change: transform;
+}
+.wv-ring {
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(45, 214, 214, 0.5);
+  will-change: transform;
+}
+.wv-ring-2 { inset: -8px; border-style: solid; border-color: rgba(82, 196, 26, 0.28); }
+
+.wv-tag {
+  display: inline-block;
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(45, 214, 214, 0.14);
+  color: #7fe7e7;
+  border: 1px solid rgba(45, 214, 214, 0.3);
+}
+.welcome-vera-section h2 {
+  color: #fff;
+  margin: 12px 0 14px;
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  line-height: 1.08;
+}
+.wv-gradient-text {
+  background: linear-gradient(90deg, #4096ff, #2dd6d6 55%, #73d13d);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.wv-lead { font-size: clamp(15px, 1.6vw, 17px); line-height: 1.6; color: #d7e5f5; margin: 0 0 14px; }
+.wv-desc { font-size: 14.5px; line-height: 1.7; color: #a9c0da; margin: 0; }
+
+.wv-features { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; min-width: 0; }
+.wv-feature {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  backdrop-filter: blur(6px);
+  will-change: transform, opacity;
+  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+.wv-feature:hover {
+  transform: translateY(-4px);
+  border-color: rgba(45, 214, 214, 0.4);
+  background: rgba(255, 255, 255, 0.08);
+}
+.wv-feature-icon {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #0b1f38;
+  background: linear-gradient(135deg, #4096ff, #2dd6d6 60%, #73d13d);
+  box-shadow: 0 6px 16px rgba(45, 214, 214, 0.3);
+}
+.wv-feature-body { min-width: 0; }
+.wv-feature-body h3 { margin: 0 0 4px; font-size: 15px; color: #fff; }
+.wv-feature-body p { margin: 0; font-size: 12.8px; line-height: 1.5; color: #a9c0da; }
+
+@media (max-width: 900px) {
+  .wv-inner { grid-template-columns: 1fr; }
+  .wv-avatar-wrap { margin-inline: auto; }
+  .wv-intro { text-align: center; }
+}
+@media (max-width: 560px) {
+  .wv-features { grid-template-columns: 1fr; }
+  .wv-grid { grid-template-columns: repeat(5, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wv-feature { transition: none; }
+  .wv-feature:hover { transform: none; }
+}

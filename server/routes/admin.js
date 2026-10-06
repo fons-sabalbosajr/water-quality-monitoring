@@ -7,6 +7,8 @@ const AppSetting = require('../models/AppSetting');
 const { protect, invalidateUser } = require('../middleware/authMiddleware');
 const { adminProtect } = require('../middleware/adminMiddleware');
 
+const { FORECAST_MONTHS_KEY, MAX_FORECAST_MONTHS, clampForecastMonths } = require('../utils/forecastSettings');
+
 const PUBLISHED_WQM_YEAR_KEY = 'visualizationYear';
 const WQM_PUBLISHED_YEARS = [2024, 2025, 2026];
 const ROLES = ['admin', 'developer', 'user'];
@@ -210,6 +212,40 @@ router.patch('/settings/visualization-year', async (req, res, next) => {
       updatedAt: setting.updatedAt,
       updatedBy: setting.updatedBy,
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// @route GET|PATCH /api/admin/settings/forecast-months
+// The forecast horizon used to live only in the admin's browser storage, so the
+// public dashboard (and admins on other devices) always forecast 3 months.
+router.get('/settings/forecast-months', async (req, res, next) => {
+  try {
+    const setting = await AppSetting.findOne({ key: FORECAST_MONTHS_KEY }).lean();
+    return res.json({
+      months: clampForecastMonths(setting?.value),
+      updatedAt: setting?.updatedAt || null,
+      updatedBy: setting?.updatedBy || null,
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.patch('/settings/forecast-months', async (req, res, next) => {
+  const months = Number(req.body?.months);
+  if (!Number.isInteger(months) || months < 1 || months > MAX_FORECAST_MONTHS) {
+    return res.status(400).json({ message: `Forecast horizon must be 1–${MAX_FORECAST_MONTHS} months.` });
+  }
+
+  try {
+    const setting = await AppSetting.findOneAndUpdate(
+      { key: FORECAST_MONTHS_KEY },
+      { key: FORECAST_MONTHS_KEY, value: months, updatedBy: req.user._id },
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
+    ).lean();
+    return res.json({ months: Number(setting.value), updatedAt: setting.updatedAt, updatedBy: setting.updatedBy });
   } catch (err) {
     return next(err);
   }

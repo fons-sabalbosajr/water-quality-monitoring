@@ -12,6 +12,7 @@ const { disconnectDB, isDbReady } = require('./config/db');
 const authRoutes = require('./routes/auth');
 const waterQualityRoutes = require('./routes/waterQuality');
 const adminRoutes = require('./routes/admin');
+const veraRoutes = require('./routes/vera');
 
 // ── Fail fast on missing configuration ──────────────────────────────────────
 // Previously a missing JWT_SECRET only surfaced as "token failed" 401s on every
@@ -111,6 +112,7 @@ app.use('/api', (req, res, next) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/water', waterQualityRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/vera', veraRoutes);
 
 // Health check — reports DB state so uptime probes catch a half-up server.
 app.get('/api/health', (req, res) => {

@@ -87,7 +87,7 @@ const Waterbody3DMap = () => {
       const sheet = sheets.find((s) => s.key === waterbody.key);
       const stationList = getAllStations(sheet);
       return resolveWaterbodyMapLocations(
-        { key: waterbody.key, name: waterbody.name, province: waterbody.province },
+        { key: waterbody.key, name: waterbody.name, province: waterbody.province, periodLabels: waterbody.periodLabels },
         stationList,
         stationLocations,
         profileSettings,

@@ -17,6 +17,8 @@ import {
 } from '../utils/wqmData';
 import { getReadableStations, getWaterbodyProfileName, useWqmSheets, useAllYearSheets } from '../utils/wqmSheets';
 import { useLineChartMergeSettings, buildMultiYearTrend } from '../utils/lineChartSettings';
+import ObservationScene from '../components/ObservationScene';
+import { classifyObservation } from '../utils/observationMeta';
 import './WaterbodyProfile.css';
 
 const STN_COLORS = ['#446ACB','#7CB675','#e07b54','#a78bfa','#f59e0b','#06b6d4','#ec4899','#84cc16'];
@@ -271,15 +273,19 @@ const WaterbodyProfile = ({ waterbodyKey, year = 2026, sheets: providedSheets = 
           <div className="wb-observation-trend">
             {observationEntries.length === 0 ? (
               <div className="wb-observation-empty">No observation values available for this waterbody.</div>
-            ) : observationEntries.map((entry) => (
-              <article key={`${entry.station.stnId}-${entry.month}`} className="wb-observation-card">
-                <span className="wb-observation-icon">i</span>
-                <div>
-                  <strong>{entry.month} · {entry.station.stnId}</strong>
-                  <p>{entry.value}</p>
-                </div>
-              </article>
-            ))}
+            ) : observationEntries.map((entry) => {
+              const meta = classifyObservation(entry.value);
+              return (
+                <article key={`${entry.station.stnId}-${entry.month}`} className={`wb-observation-card wb-observation-card-scene status-${meta.status}`}>
+                  <ObservationScene scene={meta.scene} status={meta.status} label={meta.label} />
+                  <div>
+                    <strong>{entry.month} · {entry.station.stnId}</strong>
+                    <span className="wb-observation-label">{meta.label}</span>
+                    <p>{entry.value}</p>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={280}>

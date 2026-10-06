@@ -12,7 +12,7 @@ import {
 } from '../utils/wqmData';
 import { loadStationLocationsCached } from '../utils/stationWorkbook';
 import { buildWaterbodyOptions, getReadableStations, groupWaterbodyByProvince, usePublishedWqmDataset } from '../utils/wqmSheets';
-import { useForecastMonths } from '../utils/forecastSettings';
+import { useForecastHorizon } from '../utils/forecastSync';
 import { useChartTheme } from '../utils/chartTheme';
 import encryptedStorage from '../utils/encryptedStorage';
 import './Visualizations.css';
@@ -359,7 +359,7 @@ const VisualizationView = ({ type }) => {
   const [forecastExpandedKey, setForecastExpandedKey] = useState('');
   const [forecastEngine, setForecastEngine] = useState('prophet');
   const [forecastDetailParam, setForecastDetailParam] = useState(null);
-  const forecastMonths = useForecastMonths();
+  const forecastMonths = useForecastHorizon();
   // Axis/grid/regression colours must flip with the theme — see chartTheme.js
   // for why these cannot be CSS variables.
   const chart = useChartTheme();
@@ -478,7 +478,7 @@ const VisualizationView = ({ type }) => {
       return workbookStation && dataStation && (workbookStation.includes(dataStation) || dataStation.includes(workbookStation));
     });
     const fecal = station ? getCurrentParamValue(station, 'Fecal Coliform (MPN/100mL)', currentMonthIndex) : null;
-    return { ...location, stationData: station, fecal, risk: normalizeScore('Fecal Coliform (MPN/100mL)', fecal) };
+    return { ...location, stationData: station, periodLabels: selectedSheet?.periodLabels || null, fecal, risk: normalizeScore('Fecal Coliform (MPN/100mL)', fecal) };
   }).filter((point) => point.stationData && point.fecal !== null);
 
   const trophicData = stations.map((station) => ({

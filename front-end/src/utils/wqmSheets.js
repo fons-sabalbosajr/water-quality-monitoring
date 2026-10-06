@@ -3,6 +3,7 @@ import wqmData from '../data/wqm2026.json';
 import api from '../api/axios';
 import encryptedStorage from './encryptedStorage.js';
 import { getStations, hasNumericReading, toTitle } from './wqmData.js';
+import { needsDownload, titleCaseSheetNames, toVersion } from './yearSync.js';
 
 export const WQM_DRAFTS_KEY = 'wqm_2026_drafts';
 export const WQM_DRAFTS_EVENT = 'wqm:drafts-updated';
@@ -202,6 +203,9 @@ export const buildSheets = (source = wqmData) => Object.entries(source)
     key,
     name: val.name ? toTitle(val.name) : toTitle(key),
     classInfo: val.classInfo || '',
+    // Quarterly waterbodies carry Q1–Q4 labels; without them the tables and
+    // charts label quarterly readings as Jan–Apr.
+    ...(Array.isArray(val.periodLabels) ? { periodLabels: val.periodLabels } : {}),
     stations: getStations(val),
   }))
   .filter((sheet) => sheet.stations.some(hasNumericReading));
@@ -235,9 +239,9 @@ export const resetStoredWqmSheets = () => {
 };
 
 /**
- * Read the locally cached (encrypted storage) sheets for any year.
- * For 2026 this is the live draft; for 2024/2025 this is a locally-cached
- * copy (fetched and stored after an import or a save).
+ * Read the locally cached (encrypted storage) sheets for any year — this
+ * browser's copy of the MongoDB year (see revalidateYear). For 2026 it falls
+ * back to the bundled workbook snapshot before the first sync.
  */
 export const getYearSheetsLocal = (year) => {
   if (year === DEFAULT_WQM_YEAR) return getStoredWqmSheets();
@@ -318,13 +322,21 @@ export const useWqmSheets = () => {
       return Array.isArray(next) ? [...next] : next;
     });
 
+    // Pull the MongoDB copy of the live year on mount and whenever the tab
+    // regains focus. Deduped and TTL-limited inside revalidateYear, so the
+    // many components using this hook share one cheap meta request.
+    const sync = () => { revalidateYear(DEFAULT_WQM_YEAR); };
+    sync();
+
     window.addEventListener(WQM_DRAFTS_EVENT, refresh);
     window.addEventListener('storage', refresh);
     window.addEventListener('wqms:waterbody-profile-settings', forceRefresh);
+    window.addEventListener('focus', sync);
     return () => {
       window.removeEventListener(WQM_DRAFTS_EVENT, refresh);
       window.removeEventListener('storage', refresh);
       window.removeEventListener('wqms:waterbody-profile-settings', forceRefresh);
+      window.removeEventListener('focus', sync);
     };
   }, []);
 
@@ -403,6 +415,107 @@ export const usePublishedWqmYear = ({ isPublic = false } = {}) => {
   return { year, setPublishedYear };
 };
 
+// ── MongoDB sync for stored years ───────────────────────────────────────────
+// Every year in WQM_YEAR_OPTIONS lives in MongoDB. Each browser keeps an
+// encrypted local copy for instant rendering, stamped with the server's
+// importedAt. Two bugs this replaces:
+//   • 2026 was never sent to or read from the server, so an admin's edits
+//     stayed in that admin's browser and the public dashboard kept showing
+//     the bundled workbook snapshot.
+//   • 2024/2025 were cached on first fetch and never re-checked, so saves made
+//     from another device never appeared until storage was cleared.
+// Now the local copy is served immediately and revalidated against a tiny
+// meta endpoint; the full year is downloaded only when its version changed.
+const yearDraftKey = (year) => `wqm_${year}_drafts`;
+const yearMetaKey = (year) => `wqm_${year}_meta`;
+const REVALIDATE_TTL_MS = 60 * 1000;
+
+export const isServerYear = (year) => WQM_YEAR_OPTIONS.includes(Number(year));
+
+const getLocalVersion = (year) => encryptedStorage.getItem(yearMetaKey(year))?.importedAt || null;
+
+const setLocalVersion = (year, importedAt) => {
+  encryptedStorage.setItem(yearMetaKey(year), { importedAt: toVersion(importedAt) });
+};
+
+const normalizeLiveSheets = (year, sheets) => (
+  Number(year) === DEFAULT_WQM_YEAR ? titleCaseSheetNames(sheets) : sheets
+);
+
+const writeYearCache = (year, sheets, importedAt) => {
+  encryptedStorage.setItem(yearDraftKey(year), normalizeLiveSheets(year, sheets));
+  setLocalVersion(year, importedAt);
+  window.dispatchEvent(new CustomEvent(WQM_DRAFTS_EVENT, { detail: { year } }));
+};
+
+const lastRevalidated = new Map();
+const revalidations = new Map();
+
+/**
+ * Bring this browser's copy of a stored year up to date with MongoDB.
+ * Resolves to 'updated' (local copy replaced), 'current' or 'offline' (server
+ * unreachable — the local copy, or the bundled 2026 snapshot, stays in use).
+ * Local edits whose save failed are kept until the server copy changes.
+ * @param {number} year
+ * @param {{ force?: boolean }} [options] force skips the TTL; it never discards
+ *   an up-to-date local copy.
+ */
+export const revalidateYear = (year, { force = false } = {}) => {
+  const numericYear = Number(year);
+  if (!isServerYear(numericYear)) return Promise.resolve('current');
+  if (revalidations.has(numericYear)) return revalidations.get(numericYear);
+  if (!force && Date.now() - (lastRevalidated.get(numericYear) || 0) < REVALIDATE_TTL_MS) {
+    return Promise.resolve('current');
+  }
+  lastRevalidated.set(numericYear, Date.now());
+
+  const downloadYear = () => api.get(`/water/public/wqm/${numericYear}`).then(({ data }) => {
+    const sheets = data?.sheets || [];
+    if (!sheets.length) return 'offline';
+    writeYearCache(numericYear, sheets, data?.importedAt);
+    return 'updated';
+  });
+
+  const run = api.get(`/water/public/wqm/${numericYear}/meta`)
+    .then(({ data }) => (
+      needsDownload({
+        hasLocal: Array.isArray(encryptedStorage.getItem(yearDraftKey(numericYear))),
+        serverVersion: data?.importedAt,
+        localVersion: getLocalVersion(numericYear),
+      }) ? downloadYear() : 'current'
+    ))
+    // A 404 means the meta route or the stored year is missing (e.g. an older
+    // server). Fall back to the full endpoint, which also auto-imports a year.
+    .catch((error) => (error.response?.status === 404 ? downloadYear() : 'offline'))
+    .catch(() => 'offline')
+    .finally(() => { revalidations.delete(numericYear); });
+
+  revalidations.set(numericYear, run);
+  return run;
+};
+
+/** Discard local edits for a stored year and reload the MongoDB copy. */
+export const refetchYearFromServer = async (year) => {
+  const { data } = await api.get(`/water/wqm/${year}`);
+  const sheets = data?.sheets || [];
+  if (!sheets.length) throw new Error(`MongoDB has no WQM ${year} data.`);
+  writeYearCache(year, sheets, data?.importedAt);
+  lastRevalidated.set(Number(year), Date.now());
+  return encryptedStorage.getItem(yearDraftKey(year));
+};
+
+/**
+ * Save a stored year to MongoDB (admin/developer). Stamping the local copy with
+ * the returned version stops the next revalidation from re-downloading what
+ * this browser just uploaded.
+ */
+export const saveYearToServer = async (year, sheets) => {
+  const { data } = await api.put(`/water/wqm/${year}`, { sheets });
+  setLocalVersion(year, data?.importedAt);
+  lastRevalidated.set(Number(year), Date.now());
+  return data;
+};
+
 // ── Shared archive-year fetcher ─────────────────────────────────────────────
 // Concurrent callers for the same year (dashboard + visualizations + settings
 // preview all mounting at once) previously each issued their own request for a
@@ -410,8 +523,14 @@ export const usePublishedWqmYear = ({ isPublic = false } = {}) => {
 const yearRequests = new Map();
 
 const fetchYearSheets = (year, isPublic = false) => {
-  const cached = encryptedStorage.getItem(`wqm_${year}_drafts`);
-  if (Array.isArray(cached) && cached.length) return Promise.resolve(cached);
+  const cached = encryptedStorage.getItem(yearDraftKey(year));
+  if (Array.isArray(cached) && cached.length) {
+    // Serve the cached copy instantly and check the server in the background.
+    // A newer version is written to the cache and announced on
+    // WQM_DRAFTS_EVENT, which makes every year hook re-read it.
+    revalidateYear(year);
+    return Promise.resolve(cached);
+  }
 
   const cacheKey = `${isPublic ? 'public' : 'auth'}:${year}`;
   const inFlight = yearRequests.get(cacheKey);
@@ -421,7 +540,11 @@ const fetchYearSheets = (year, isPublic = false) => {
   const request = api.get(endpoint)
     .then((response) => {
       const sheets = response.data?.sheets || [];
-      if (sheets.length) encryptedStorage.setItem(`wqm_${year}_drafts`, sheets);
+      if (sheets.length) {
+        encryptedStorage.setItem(yearDraftKey(year), sheets);
+        setLocalVersion(year, response.data?.importedAt);
+        lastRevalidated.set(Number(year), Date.now());
+      }
       return sheets;
     })
     .finally(() => { yearRequests.delete(cacheKey); });
@@ -459,7 +582,14 @@ export const usePublishedWqmDataset = ({ isPublic = false } = {}) => {
   }, []);
 
   useEffect(() => {
-    // 2026 is served entirely from local storage; there is nothing to fetch.
+    // 2026 is read through useWqmSheets, which syncs it with MongoDB itself.
+    if (year === DEFAULT_WQM_YEAR) return undefined;
+    const sync = () => { revalidateYear(year); };
+    window.addEventListener('focus', sync);
+    return () => window.removeEventListener('focus', sync);
+  }, [year]);
+
+  useEffect(() => {
     if (year === DEFAULT_WQM_YEAR) return undefined;
 
     let cancelled = false;
@@ -567,6 +697,8 @@ export const buildWaterbodyOptions = (sheets) => sheets
       key: sheet.key,
       name: getWaterbodyProfileName(sheet.key, sheet.name),
       classInfo: sheet.classInfo || '',
+      // Quarterly sheets label their slots Q1–Q4; the map cards need this.
+      periodLabels: sheet.periodLabels || null,
       stations: getReadableStations(sheet),
       group: groupInfo.group,
       groupIndex: groupInfo.groupIndex,

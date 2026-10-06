@@ -236,19 +236,32 @@
   line-height: 1.1;
 }
 
+/* Floating station card. Anchored above Cesium's fullscreen button
+   (bottom-right) and capped below the elevation badge, so it never covers
+   the map controls or gets clipped on short maps; the body scrolls instead.
+   It used to carry its own padding on top of the antd card padding. */
 .cesium-station-card {
   position: absolute;
   right: 0.75rem;
-  bottom: 0.75rem;
+  bottom: 2.6rem;
   z-index: 6;
+  display: flex;
+  flex-direction: column;
   width: min(380px, calc(100% - 1.5rem));
+  max-height: calc(100% - 8.4rem);
+  min-height: 0;
   border: 1px solid rgba(255,255,255,0.16);
   border-radius: 0.75rem;
   background: rgba(15,23,42,0.9);
   color: #f8fafc;
-  padding: 0.75rem;
   box-shadow: 0 18px 50px rgba(0,0,0,0.34);
   backdrop-filter: blur(14px);
+  animation: cesium-card-in 0.22s ease-out;
+}
+
+@keyframes cesium-card-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: none; }
 }
 
 .cesium-station-card.ant-card {
@@ -269,8 +282,18 @@
   background: rgba(255,255,255,0.1);
 }
 
+.cesium-station-card .ant-card-head {
+  flex: 0 0 auto;
+}
+
 .cesium-station-card .ant-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.7rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148,163,184,0.4) transparent;
 }
 
 .cesium-station-card-title {
@@ -359,13 +382,55 @@
   background: rgba(255,255,255,0.04);
 }
 
-.quality-row > div {
+.quality-row-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.7rem;
-  
 }
+
+/* Sparkline + guideline gauge under each parameter. */
+.quality-row-viz {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.station-spark {
+  display: block;
+  overflow: visible;
+}
+
+.quality-row-viz.no-spark {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.station-spark-line {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.station-spark-area {
+  opacity: 0.14;
+  stroke: none;
+}
+
+.station-spark-guide {
+  stroke: rgba(226,232,240,0.45);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.quality-change {
+  font-size: 0.55rem;
+  font-style: normal;
+}
+
+.quality-change.up { color: #fca5a5; }
+.quality-change.down { color: #86efac; }
 
 .quality-param {
   display: inline-flex;
@@ -545,13 +610,12 @@
   .cesium-station-card {
     left: 0.65rem;
     right: 0.65rem;
-    bottom: 0.65rem;
+    bottom: 2.5rem;
     width: auto;
-    max-height: min(320px, calc(100% - 1.3rem));
-    overflow: auto;
+    max-height: min(340px, calc(100% - 7.5rem));
   }
 
-  .quality-row > div {
+  .quality-row-head {
     align-items: start;
     flex-direction: column;
     gap: 0.15rem;
@@ -577,4 +641,8 @@
     font-size: 0.68rem;
     padding: 0.38rem 0.48rem;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cesium-station-card { animation: none; }
 }

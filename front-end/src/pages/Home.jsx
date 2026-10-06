@@ -25,6 +25,9 @@ import { PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined } from "@ant-de
 import bagongLogo from "../assets/bagongpilipinaslogo.png";
 import embLogo from "../assets/emblogo.svg";
 import WQM2026 from "./WQM2026";
+import VeraChat from "../components/vera/VeraChat";
+import ObservationScene from "../components/ObservationScene";
+import { classifyObservation } from "../utils/observationMeta";
 import Settings from "./Settings";
 import WaterbodyProfile from "./WaterbodyProfile";
 import { logActivity } from "../utils/appLog";
@@ -46,10 +49,7 @@ import {
   IcoLogout,
   IcoMapPin,
   IcoWaves,
-  IcoBoat,
   IcoAlertTriangle,
-  IcoCheckCircle,
-  IcoEye,
   IcoMenu,
 } from "../components/Icons";
 import {
@@ -294,48 +294,6 @@ const getCorrelationInterpretation = (matrix) => {
   };
 };
 
-const getObservationMeta = (value) => {
-  const text = String(value || "").toLowerCase();
-  if (
-    /dead|kill|oil|grease|sewage|garbage|trash|foul|odor|black|foam/.test(text)
-  ) {
-    return {
-      label: "Critical",
-      status: "critical",
-      icon: <IcoAlertTriangle size={16} />,
-    };
-  }
-  if (
-    /high\s*tide|low\s*tide|tide|rain|flood|turbid|muddy|construction/.test(
-      text,
-    )
-  ) {
-    return {
-      label: /high\s*tide/.test(text)
-        ? "High Tide"
-        : /low\s*tide/.test(text)
-          ? "Low Tide"
-          : "Watch",
-      status: "watch",
-      icon: <IcoWaves size={16} />,
-    };
-  }
-  if (/boat|fishing|fishers|vessel|banca/.test(text)) {
-    return {
-      label: "Boat Activity",
-      status: "watch",
-      icon: <IcoBoat size={16} />,
-    };
-  }
-  if (/clear|normal|good|stable|none|no /.test(text)) {
-    return {
-      label: "Good",
-      status: "good",
-      icon: <IcoCheckCircle size={16} />,
-    };
-  }
-  return { label: "Observed", status: "observed", icon: <IcoEye size={16} /> };
-};
 
 const TrendValueLabel = ({
   x,
@@ -621,7 +579,7 @@ const DashboardView = () => {
     // overrides, and a stable id. This prevents stations from other waterbodies
     // bleeding onto the map.
     return resolveWaterbodyMapLocations(
-      { key: activeWaterbodyKey, name: selectedInfo?.name, province: selectedInfo?.province },
+      { key: activeWaterbodyKey, name: selectedInfo?.name, province: selectedInfo?.province, periodLabels: selectedInfo?.periodLabels },
       stations,
       stationLocations,
       profileSettings,
@@ -1117,27 +1075,34 @@ const DashboardView = () => {
               }))}
             />
           </div>
-          <div className="observation-list observation-list-side">
+          <div className="observation-list observation-list-side" key={activeObservationMonth || 'all'}>
             {filteredObservations.length ? (
-              filteredObservations.map((entry) => (
-                <article
-                  key={`${entry.station.stnId}-${entry.month}`}
-                  className={`observation-item status-${getObservationMeta(entry.value).status}`}
-                >
-                  <span className="observation-icon">
-                    {getObservationMeta(entry.value).icon}
-                  </span>
-                  <div>
-                    <strong>
-                      {entry.month} · {entry.station.stnId}
-                    </strong>
-                    <span className="observation-status-label">
-                      {getObservationMeta(entry.value).label}
-                    </span>
-                    <p>{entry.value}</p>
-                  </div>
-                </article>
-              ))
+              filteredObservations.map((entry, index) => {
+                const meta = classifyObservation(entry.value);
+                return (
+                  <article
+                    key={`${entry.station.stnId}-${entry.month}`}
+                    className={`observation-item observation-item-scene status-${meta.status}`}
+                    style={{ "--obs-i": Math.min(index, 8) }}
+                  >
+                    <ObservationScene scene={meta.scene} status={meta.status} label={meta.label} />
+                    <div>
+                      <strong>
+                        {entry.month} · {entry.station.stnId}
+                      </strong>
+                      <span className="observation-status-label">
+                        {meta.label}
+                      </span>
+                      <p>{entry.value}</p>
+                      {meta.tags.length > 0 && (
+                        <span className="observation-tags">
+                          {meta.tags.map((tag) => <span key={tag}>{tag}</span>)}
+                        </span>
+                      )}
+                    </div>
+                  </article>
+                );
+              })
             ) : (
               <div className="map-empty-state">
                 No observations are available for this filter.
@@ -1575,6 +1540,8 @@ const Home = () => {
                       ["chart-config", "Chart Configuration"],
                       ["logs", "App Logs"],
                       ["backup", "Backup, Data & Email"],
+                      // VERA's model and permissions are developer-only.
+                      ...(user?.role === "developer" ? [["vera", "VERA Assistant"]] : []),
                     ].map(([section, label]) => (
                       <button
                         key={section}
@@ -1786,6 +1753,10 @@ const Home = () => {
         onClose={() => setNewYearOpen(false)}
         sourceSheets={localSheets}
         onCreated={(yr) => nav(`tabular-${yr}`)}
+      />
+
+      <VeraChat
+        activeMenu={activeView === "visualization" ? `visualization:${activeVisualization}` : activeView}
       />
     </div>
   );

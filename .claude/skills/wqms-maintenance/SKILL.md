@@ -29,10 +29,10 @@ Compare against the last known-good baseline before deciding anything is new:
 
 | Check | Known-good |
 |---|---|
-| `server` audit | 0 vulnerabilities |
-| `server` tests | 9 passing (`tests/validateSheets.test.js`) |
+| `server` audit | 3 high — one dev-only chain (`nodemon` → `chokidar` → `braces`), no patched `braces` exists. Accepted, see §1.1 |
+| `server` tests | 32 passing (`tests/validateSheets`, `wqmWorkbook`, `vera`) |
 | `front-end` audit | 0 vulnerabilities |
-| `front-end` tests | 55 passing (`src/utils/*.test.js`, `src/context/*.test.js`) |
+| `front-end` tests | 61 passing (`src/utils/*.test.js`, `src/context/*.test.js`) |
 | `front-end` lint | 15 problems (10 errors, 5 warnings) — all pre-existing, see §5 |
 | `front-end` build | succeeds; `CesiumStationMap` chunk ~4MB (lazy-loaded, expected) |
 
@@ -72,6 +72,15 @@ v10+ uses `minimatch` ^10), then override `brace-expansion` to `^5.0.8`.
 After any `brace-expansion` / `minimatch` change, **run ESLint and confirm it
 prints results rather than a stack trace.** `npx eslint src/` exits 0 on an
 internal crash, so a bare exit-code check will not catch this.
+
+**`npm audit fix` can DOWNGRADE `nodemon` to 1.x.** The only "fix" npm offers for
+the `braces` advisory is `nodemon@1.14.10`, which drags in ~12 *more* advisories
+(old chokidar, got, cross-spawn, update-notifier). This happened on 2026-10-06 and
+turned 3 findings into 15. Keep `nodemon` at ^3; accept the dev-only `braces` chain.
+
+**Overrides pin floors, so raise them.** Both `overrides` blocks hold caret floors
+(`brace-expansion`, `qs`, `dompurify`, `proxy-addr`, `@xmldom/xmldom` …). When an
+advisory lands above a floor, bump the floor to the patched version.
 
 **`npm audit fix --force` on `react-router` proposes a downgrade.** It suggests
 `react-router-dom@7.11.0`, moving backwards ~7 minors. Do not accept it.

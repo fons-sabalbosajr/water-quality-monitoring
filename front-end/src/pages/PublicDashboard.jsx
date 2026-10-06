@@ -86,7 +86,7 @@ import {
 } from "../utils/wqmSheets";
 import { loadStationLocationsCached } from "../utils/stationWorkbook";
 import { resolveWaterbodyMapLocations } from "../utils/stationGeo";
-import { useForecastMonths } from "../utils/forecastSettings";
+import { useForecastHorizon } from "../utils/forecastSync";
 import "./PublicDashboard.css";
 
 const CesiumStationMap = lazy(() => import("../components/CesiumStationMap"));
@@ -772,7 +772,7 @@ const DashboardView = ({
   const [chartParam, setChartParam] = useState("");
   const [forecastStnId, setForecastStnId] = useState("");
   // Reactive forecast horizon — applies admin changes immediately.
-  const forecastMonths = useForecastMonths();
+  const forecastMonths = useForecastHorizon();
 
   const chartParams = useMemo(
     () =>
@@ -789,6 +789,10 @@ const DashboardView = ({
     ? chartParam
     : chartParams[0] || "";
 
+  // Quarterly waterbodies store Q1–Q4 in the first slots; label them so.
+  const periodLabels = sheet?.periodLabels;
+  const periodLabelAt = (i) => periodLabels?.[i] || MONTHS_SHORT[i];
+
   let currentMonthIdx = -1;
   for (let i = MONTHS_SHORT.length - 1; i >= 0; i -= 1) {
     if (
@@ -802,15 +806,16 @@ const DashboardView = ({
   }
   const currentPeriod =
     currentMonthIdx >= 0
-      ? `${MONTHS_SHORT[currentMonthIdx]} ${year}`
+      ? `${periodLabelAt(currentMonthIdx)} ${year}`
       : String(year);
 
   /* ── Trend + forecast (horizon from the Forecast Horizon setting) ── */
   const { trendDataWithForecast, lastObservedMonth } = useMemo(() => {
     if (!activeChartParam || !stations.length)
       return { trendDataWithForecast: [], lastObservedMonth: null };
-    const observed = MONTHS_SHORT.map((month, i) => {
-      const pt = { month };
+    const labelAt = (i) => periodLabels?.[i] || MONTHS_SHORT[i];
+    const observed = MONTHS_SHORT.map((_, i) => {
+      const pt = { month: labelAt(i) };
       stations.forEach((stn, idx) => {
         pt[`s${idx}`] = getMonthlyNumber(
           getParamData(stn, activeChartParam),
@@ -827,8 +832,8 @@ const DashboardView = ({
       return { trendDataWithForecast: [], lastObservedMonth: null };
     const lastMonth = observed[observed.length - 1].month;
     const stationForecasts = stations.map((stn, idx) => {
-      const stnObs = MONTHS_SHORT.map((month, i) => ({
-        month,
+      const stnObs = MONTHS_SHORT.map((_, i) => ({
+        month: labelAt(i),
         actual: getMonthlyNumber(getParamData(stn, activeChartParam), i),
       })).filter((pt) => pt.actual !== null);
       if (stnObs.length < 3) return { idx, points: [] };
@@ -858,13 +863,13 @@ const DashboardView = ({
       trendDataWithForecast: [...bridged, ...fcPoints],
       lastObservedMonth: lastMonth,
     };
-  }, [activeChartParam, stations, forecastMonths]);
+  }, [activeChartParam, stations, forecastMonths, periodLabels]);
 
   /* ── KPI values ── */
   const selectedName =
     waterbodyOptions.find((o) => o.key === waterbodyKey)?.name || waterbodyKey;
   const doVals = stations
-    .map((stn) => getLatestNumber(getParamData(stn, "DO")))
+    .map((stn) => getLatestNumber(getParamData(stn, "DO (mg/L)")))
     .filter(Number.isFinite);
   const avgDO = doVals.length ? avg(doVals) : null;
   const fecalVals = stations
@@ -896,7 +901,7 @@ const DashboardView = ({
     // plotted, each enriched with its record for popups and any admin
     // coordinate overrides applied.
     return resolveWaterbodyMapLocations(
-      { key: waterbodyKey, name: selectedName, province: option?.province },
+      { key: waterbodyKey, name: selectedName, province: option?.province, periodLabels: option?.periodLabels },
       stations,
       stationLocations,
     );
@@ -1582,7 +1587,7 @@ const TabularView = ({
   const [requestOpen, setRequestOpen] = useState(false);
   const [pendingExportFn, setPendingExportFn] = useState(null);
   // Reactive forecast horizon — applies admin changes immediately.
-  const forecastMonths = useForecastMonths();
+  const forecastMonths = useForecastHorizon();
 
   const visibleStations =
     filterStation === "all"

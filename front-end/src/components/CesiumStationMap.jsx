@@ -43,6 +43,7 @@ import 'cesium/Build/Cesium/Widgets/widgets.css';
 import api from '../api/axios';
 import {
   MONTHS_SHORT,
+  PARAM_LIMITS,
   PARAM_ORDER,
   fmt,
   fmtWithUnit,
@@ -173,14 +174,19 @@ const getMapLabelGroups = (locations, fallbackName) => {
   });
 };
 
-const createPulsePixelSize = (index) => new CallbackProperty(() => {
+// Every station pulses only on small maps; on the all-stations maps (100+
+// pins) only the selected station does, so the redraw stays cheap.
+const PULSE_ALL_LIMIT = 12;
+const PULSE_FRAME_MS = 50;
+
+const createPulsePixelSize = (index, base = 12, grow = 28) => new CallbackProperty(() => {
   const phase = ((Date.now() / 1200) + (index * 0.18)) % 1;
-  return 12 + (phase * 28);
+  return base + (phase * grow);
 }, false);
 
-const createPulseColor = (index) => new CallbackProperty(() => {
+const createPulseColor = (index, color = Color.CYAN, alpha = 0.26) => new CallbackProperty(() => {
   const phase = ((Date.now() / 1200) + (index * 0.18)) % 1;
-  return Color.CYAN.withAlpha(0.26 * (1 - phase));
+  return color.withAlpha(alpha * (1 - phase));
 }, false);
 
 const getStationName = (location, index) => (
@@ -257,7 +263,11 @@ const dedupeLocationCoordinates = (locations) => {
   });
 };
 
-const getStationMetrics = (station) => {
+// Quarterly waterbodies store Q1–Q4 in the first four slots; label them so,
+// instead of "Jan–Apr".
+const periodLabelFor = (periodLabels, index) => periodLabels?.[index] || MONTHS_SHORT[index] || `Month ${index + 1}`;
+
+const getStationMetrics = (station, periodLabels) => {
   if (!station) return [];
   const params = getAvailableParams([station])
     .filter((param) => PARAM_ORDER.includes(param))
@@ -266,30 +276,65 @@ const getStationMetrics = (station) => {
   return params
     .map((param) => {
       const paramData = getParamData(station, param);
-      let value = null;
-      let monthLabel = 'Annual Avg';
-      const monthly = paramData?.monthly || [];
-      for (let index = monthly.length - 1; index >= 0; index -= 1) {
-        const monthlyValue = toNumber(monthly[index]);
-        if (monthlyValue !== null) {
-          value = monthlyValue;
-          monthLabel = MONTHS_SHORT[index] || `Month ${index + 1}`;
-          break;
-        }
-      }
-      if (value === null) value = getAverageNumber(paramData);
+      const series = (paramData?.monthly || [])
+        .map((raw, index) => ({ index, label: periodLabelFor(periodLabels, index), value: toNumber(raw) }))
+        .filter((point) => point.value !== null);
+      const latest = series.at(-1);
+      const value = latest ? latest.value : getAverageNumber(paramData);
       if (value === null || value === undefined) return null;
+      const previous = series.at(-2)?.value;
       return {
         param,
         value,
         label: fmtWithUnit(value, param),
-        monthLabel,
+        monthLabel: latest ? latest.label : 'Annual Avg',
         percent: getGaugePercent(param, value),
         status: getParamStatus(param, value),
+        series,
+        change: previous === undefined || previous === null ? null : value - previous,
       };
     })
     .filter(Boolean)
-    .slice(0, 5);
+    .slice(0, 6);
+};
+
+// Tiny inline trend chart for the station card: the readings so far, the
+// guideline as a dashed line, and the latest point coloured by status.
+const SPARK_W = 96;
+const SPARK_H = 26;
+const SPARK_STATUS_COLOR = { alert: '#f87171', watch: '#fbbf24', safe: '#4ade80', nodata: '#94a3b8' };
+
+const Sparkline = ({ param, series, status }) => {
+  if (!series || series.length < 2) return null;
+  const limit = PARAM_LIMITS[param];
+  const values = series.map((point) => point.value);
+  const guides = [limit?.min, limit?.max].filter((v) => v !== undefined);
+  // Include the guideline in the scale only when it is near the data, so a
+  // fecal limit of 1,000 does not flatten a series in the millions.
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  const span = dataMax - dataMin || Math.abs(dataMax) || 1;
+  const nearGuides = guides.filter((g) => g >= dataMin - span && g <= dataMax + span);
+  const min = Math.min(dataMin, ...nearGuides);
+  const max = Math.max(dataMax, ...nearGuides);
+  const range = max - min || 1;
+  const x = (i) => 2 + (i / (series.length - 1)) * (SPARK_W - 4);
+  const y = (v) => SPARK_H - 3 - ((v - min) / range) * (SPARK_H - 6);
+  const points = series.map((point, i) => `${x(i).toFixed(1)},${y(point.value).toFixed(1)}`).join(' ');
+  const last = series.at(-1);
+  const color = SPARK_STATUS_COLOR[status] || SPARK_STATUS_COLOR.nodata;
+  const title = series.map((point) => `${point.label} ${fmt(point.value)}`).join(' · ');
+  return (
+    <svg className="station-spark" width={SPARK_W} height={SPARK_H} viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} role="img" aria-label={`${param} trend: ${title}`}>
+      <title>{title}</title>
+      {nearGuides.map((g) => (
+        <line key={g} x1="0" x2={SPARK_W} y1={y(g)} y2={y(g)} className="station-spark-guide" />
+      ))}
+      <polyline points={`${x(0)},${SPARK_H} ${points} ${x(series.length - 1)},${SPARK_H}`} className="station-spark-area" style={{ fill: color }} />
+      <polyline points={points} className="station-spark-line" style={{ stroke: color }} />
+      <circle cx={x(series.length - 1)} cy={y(last.value)} r="2.6" style={{ fill: color }} />
+    </svg>
+  );
 };
 
 const getOverallStatus = (metrics) => {
@@ -396,13 +441,37 @@ const CesiumStationMap = ({
   const [toolsOpen, setToolsOpen] = useState(false);
   const [renderFailed, setRenderFailed] = useState('');
   const [cameraElevation, setCameraElevation] = useState(null);
-  const [selectedLocation, setSelectedLocation] = useState(null);
+  // The card follows a station *id*, not a copy of the station taken at click
+  // time, so it keeps showing current readings when the data re-syncs.
+  const [selectedId, setSelectedId] = useState(null);
 
   const safeLocations = useMemo(() => (
     dedupeLocationCoordinates(
       (locations || []).filter((location) => Number.isFinite(location.lat) && Number.isFinite(location.lng)),
     )
   ), [locations]);
+
+  // Marker colour/number and a stable entity id per station.
+  const decoratedLocations = useMemo(() => safeLocations.map((location, index) => ({
+    ...location,
+    selectionKey: String(location.id ?? `point-${index}`),
+    entityId: `station-${location.id || 'point'}-${index}`,
+    markerColor: getMarkerColorForLocation(location, index),
+    markerNumber: location.markerNumber ?? location.stationData?.stnNo ?? (index + 1),
+    altitude: 28 + (index % 4) * 9,
+  })), [safeLocations]);
+
+  // Camera framing depends only on WHERE the stations are. A data refresh that
+  // keeps the same stations must not fly the camera back to the overview.
+  const positionsKey = useMemo(
+    () => safeLocations.map((l) => `${l.lat.toFixed(5)},${l.lng.toFixed(5)}`).join('|'),
+    [safeLocations],
+  );
+
+  const selectedLocation = useMemo(
+    () => (selectedId ? decoratedLocations.find((l) => l.selectionKey === selectedId) || null : null),
+    [decoratedLocations, selectedId],
+  );
   const labelsVisible = labelsEnabled && showStationLabels;
   const canUseIon = Boolean(ionToken);
   const hasRenderableLocations = safeLocations.length > 0;
@@ -523,10 +592,12 @@ const CesiumStationMap = ({
         fullscreenButton: true,
         geocoder: false,
         homeButton: true,
-        infoBox: true,
+        // The station card below replaces Cesium's own InfoBox. With both on,
+        // a click opened two overlapping floating panels with different data.
+        infoBox: false,
         navigationHelpButton: !isCompactViewport(),
         sceneModePicker: false,
-        selectionIndicator: true,
+        selectionIndicator: false,
         timeline: false,
         requestRenderMode: true,
         maximumRenderTimeChange: 1,
@@ -612,7 +683,7 @@ const CesiumStationMap = ({
       const picked = viewer.scene.pick(movement.position);
       const entityId = picked?.id?.id;
       if (entityId && entityLocationsRef.current.has(entityId)) {
-        setSelectedLocation(entityLocationsRef.current.get(entityId));
+        setSelectedId(entityLocationsRef.current.get(entityId).selectionKey);
       }
     };
 
@@ -775,53 +846,45 @@ const CesiumStationMap = ({
     };
   }, [layer, mapTiler.key]);
 
+  // ── Station entities ─────────────────────────────────────────────────────
+  // Rebuilt when the stations or label settings change, WITHOUT touching the
+  // camera or the open card. Previously this also cleared the selection and
+  // re-flew the camera, so every data sync or Labels toggle threw the user
+  // back to the overview and closed the card they were reading.
   useEffect(() => {
     const viewer = viewerRef.current;
-    if (!viewer) return;
+    if (!viewer || viewer.isDestroyed()) return;
 
+    viewer.entities.suspendEvents();
     viewer.entities.removeAll();
     entityLocationsRef.current.clear();
-    setSelectedLocation(null);
-    if (!safeLocations.length) return;
+    const pulseAll = decoratedLocations.length <= PULSE_ALL_LIMIT;
 
-    const mapLabels = getMapLabelGroups(safeLocations, waterbodyName);
-
-    safeLocations.forEach((location, index) => {
+    decoratedLocations.forEach((location, index) => {
       const stationName = getStationName(location, index);
-      const stationEntityId = `station-${location.id || 'point'}-${index}`;
-      const markerColor = getMarkerColorForLocation(location, index);
-      const markerNumber = location.markerNumber
-        ?? location.stationData?.stnNo
-        ?? (index + 1);
-      const position = Cartesian3.fromDegrees(location.lng, location.lat, 28 + (index % 4) * 9);
       const groundPosition = Cartesian3.fromDegrees(location.lng, location.lat, 0);
 
-      viewer.entities.add({
-        id: `station-pulse-${location.id || 'point'}-${index}`,
-        position: groundPosition,
-        point: {
-          pixelSize: createPulsePixelSize(index),
-          color: createPulseColor(index),
-          outlineColor: Color.WHITE.withAlpha(0.16),
-          outlineWidth: 1,
-          heightReference: HeightReference.CLAMP_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-      });
+      if (pulseAll) {
+        viewer.entities.add({
+          id: `station-pulse-${location.entityId}`,
+          position: groundPosition,
+          point: {
+            pixelSize: createPulsePixelSize(index),
+            color: createPulseColor(index),
+            outlineColor: Color.WHITE.withAlpha(0.16),
+            outlineWidth: 1,
+            heightReference: HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+      }
 
       viewer.entities.add({
-        id: stationEntityId,
+        id: location.entityId,
         name: stationName,
-        position,
-        description: [
-          `<strong>${location.waterbodyName || waterbodyName}</strong>`,
-          `<br/>Station: ${stationName}`,
-          `<br/>Barangay/Province: ${getStationAddress(location)}`,
-          `<br/>Coordinates: ${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`,
-          Number.isFinite(location.fecal) ? `<br/>Fecal Coliform: ${location.fecal}` : '',
-        ].join(''),
+        position: Cartesian3.fromDegrees(location.lng, location.lat, location.altitude),
         billboard: {
-          image: getMarkerSvg(markerColor, markerNumber),
+          image: getMarkerSvg(location.markerColor, location.markerNumber),
           width: 30,
           height: 36,
           verticalOrigin: VerticalOrigin.BOTTOM,
@@ -833,7 +896,7 @@ const CesiumStationMap = ({
           show: labelsVisible,
           font: '600 12px Segoe UI, Arial, sans-serif',
           fillColor: Color.WHITE,
-          outlineColor: Color.fromCssColorString(markerColor),
+          outlineColor: Color.fromCssColorString(location.markerColor),
           outlineWidth: 3,
           style: LabelStyle.FILL_AND_OUTLINE,
           showBackground: true,
@@ -844,16 +907,13 @@ const CesiumStationMap = ({
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
-      entityLocationsRef.current.set(stationEntityId, {
-        ...location,
-        markerColor,
-        markerNumber,
-      });
+      entityLocationsRef.current.set(location.entityId, location);
     });
 
     // Only render waterbody centroid labels when more than one distinct
     // waterbody is shown — a single waterbody name is already in the header and
     // the redundant centroid label overlaps the station pins.
+    const mapLabels = getMapLabelGroups(decoratedLocations, waterbodyName);
     if (mapLabels.length > 1) {
       mapLabels.forEach((group, index) => {
         viewer.entities.add({
@@ -878,9 +938,66 @@ const CesiumStationMap = ({
         });
       });
     }
+    viewer.entities.resumeEvents();
+    viewer.scene.requestRender();
+  }, [decoratedLocations, labelsEnabled, labelsVisible, waterbodyName]);
 
-    focusStationBounds(viewer, safeLocations, 0.85, birdseye);
-  }, [birdseye, labelsEnabled, labelsVisible, safeLocations, waterbodyName]);
+  // ── Camera framing — only when the set of station positions changes ──────
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed() || !positionsKey) return;
+    focusStationBounds(viewer, latestLocationsRef.current, 0.85, birdseyeRef.current);
+  }, [positionsKey, hasRenderableLocations]);
+
+  // ── Selection: highlight ring on the chosen station; drop a selection
+  //    whose station disappeared from the data. ─────────────────────────────
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return undefined;
+    if (selectedId && !selectedLocation) {
+      queueMicrotask(() => setSelectedId(null));
+      return undefined;
+    }
+    if (!selectedLocation) return undefined;
+    const ring = viewer.entities.add({
+      id: 'station-selected-ring',
+      position: Cartesian3.fromDegrees(selectedLocation.lng, selectedLocation.lat, 0),
+      point: {
+        pixelSize: createPulsePixelSize(0, 18, 34),
+        color: Color.TRANSPARENT,
+        outlineColor: createPulseColor(0, Color.fromCssColorString(selectedLocation.markerColor), 0.95),
+        outlineWidth: 3,
+        heightReference: HeightReference.CLAMP_TO_GROUND,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    });
+    viewer.scene.requestRender();
+    return () => {
+      tryCesiumCleanup(() => { if (!viewer.isDestroyed()) viewer.entities.remove(ring); });
+    };
+  }, [selectedId, selectedLocation]);
+
+  // ── Pulse animation tick ─────────────────────────────────────────────────
+  // requestRenderMode only redraws on demand, so the pulse rings froze between
+  // camera moves and then jumped. Drive a light ~20 fps redraw, but only while
+  // something is pulsing and the map is actually on screen.
+  const pulsing = decoratedLocations.length > 0 && (decoratedLocations.length <= PULSE_ALL_LIMIT || Boolean(selectedLocation));
+  useEffect(() => {
+    if (!pulsing) return undefined;
+    const id = window.setInterval(() => {
+      const viewer = viewerRef.current;
+      if (viewer && !viewer.isDestroyed() && viewer.useDefaultRenderLoop) viewer.scene.requestRender();
+    }, PULSE_FRAME_MS);
+    return () => window.clearInterval(id);
+  }, [pulsing]);
+
+  // Esc closes the station card.
+  useEffect(() => {
+    if (!selectedId) return undefined;
+    const onKey = (event) => { if (event.key === 'Escape') setSelectedId(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedId]);
 
   const toggleTerrain = async () => {
     const viewer = viewerRef.current;
@@ -950,7 +1067,15 @@ const CesiumStationMap = ({
     ['osm', 'OSM'],
     ...(mapTiler.key ? [['hybrid', 'Hybrid'], ['satellite', 'Satellite'], ['streets', 'Streets']] : []),
   ];
-  const selectedMetrics = getStationMetrics(selectedLocation?.stationData);
+  const selectedMetrics = useMemo(
+    () => getStationMetrics(selectedLocation?.stationData, selectedLocation?.periodLabels),
+    [selectedLocation],
+  );
+  // Most recent period with any reading — tells the viewer how current the card is.
+  const latestPeriod = selectedMetrics.reduce((best, m) => {
+    const last = m.series.at(-1);
+    return last && (!best || last.index > best.index) ? last : best;
+  }, null)?.label || '';
   const selectedStatus = getOverallStatus(selectedMetrics);
 
   return (
@@ -1027,6 +1152,7 @@ const CesiumStationMap = ({
           <div ref={mountRef} className="cesium-station-map-canvas" />
           {selectedLocation && (
             <Card
+              key={selectedLocation.selectionKey}
               className={`cesium-station-card status-${selectedStatus}`}
               size="small"
               title={(
@@ -1035,7 +1161,7 @@ const CesiumStationMap = ({
                     className="station-pin-badge"
                     style={{ background: selectedLocation.markerColor || '#446ACB' }}
                   >
-                    {selectedLocation.markerNumber ?? selectedLocation.stationData?.stnNo ?? '•'}
+                    {selectedLocation.markerNumber ?? '•'}
                   </span>
                   <span>
                     <small>{selectedLocation.waterbodyName || waterbodyName}</small>
@@ -1043,7 +1169,7 @@ const CesiumStationMap = ({
                   </span>
                 </Space>
               )}
-              extra={<Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setSelectedLocation(null)} aria-label="Close station monitoring card" />}
+              extra={<Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setSelectedId(null)} aria-label="Close station monitoring card" />}
             >
               <Space orientation="vertical" size="small" className="cesium-station-card-content">
                 <Space wrap size={6}>
@@ -1053,6 +1179,7 @@ const CesiumStationMap = ({
                   >
                     {getStatusLabel(selectedStatus)}
                   </Tag>
+                  {latestPeriod && <Tag className="station-coord-tag">Latest: {latestPeriod}</Tag>}
                   <Tag icon={<EnvironmentOutlined />} className="station-coord-tag">
                     {selectedLocation.lat.toFixed(5)}, {selectedLocation.lng.toFixed(5)}
                   </Tag>
@@ -1063,7 +1190,7 @@ const CesiumStationMap = ({
                 <div className="cesium-quality-list">
                   {selectedMetrics.map((metric) => (
                     <div className={`quality-row ${metric.status}`} key={metric.param}>
-                      <div>
+                      <div className="quality-row-head">
                         <span className="quality-param">
                           <Badge
                             status={
@@ -1077,15 +1204,23 @@ const CesiumStationMap = ({
                         </span>
                         <strong>
                           {metric.label}
+                          {metric.change !== null && Math.abs(metric.change) > 1e-9 && (
+                            <em className={`quality-change ${metric.change > 0 ? 'up' : 'down'}`} title="Change from the previous reading">
+                              {metric.change > 0 ? '▲' : '▼'}
+                            </em>
+                          )}
                           <em className="quality-month">{metric.monthLabel}</em>
                         </strong>
                       </div>
-                      <Progress
-                        percent={Math.round(metric.percent)}
-                        showInfo={false}
-                        size="small"
-                        status={metric.status === 'alert' ? 'exception' : metric.status === 'watch' ? 'active' : 'success'}
-                      />
+                      <div className={`quality-row-viz${metric.series.length < 2 ? ' no-spark' : ''}`}>
+                        <Sparkline param={metric.param} series={metric.series} status={metric.status} />
+                        <Progress
+                          percent={Math.round(metric.percent)}
+                          showInfo={false}
+                          size="small"
+                          status={metric.status === 'alert' ? 'exception' : metric.status === 'watch' ? 'active' : 'success'}
+                        />
+                      </div>
                     </div>
                   ))}
                   {!selectedMetrics.length && (

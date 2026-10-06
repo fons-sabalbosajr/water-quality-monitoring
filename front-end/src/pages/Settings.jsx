@@ -77,6 +77,8 @@ import {
   useAllYearSheets,
   getYearSheetsLocal,
   saveYearSheetsLocal,
+  saveYearToServer,
+  refetchYearFromServer,
 } from "../utils/wqmSheets";
 import {
   MONTHS_SHORT,
@@ -96,10 +98,11 @@ import {
   logActivity,
 } from "../utils/appLog";
 import {
-  useForecastMonths,
-  setForecastMonths as setForecastMonthsSetting,
-} from "../utils/forecastSettings";
+  useForecastHorizon,
+  saveForecastMonthsToServer,
+} from "../utils/forecastSync";
 import { confirmAction, toastSaved, alertError } from "../utils/swal";
+import VeraSettingsPanel from "../components/vera/VeraSettingsPanel";
 import { useTablePagination } from "../utils/tablePagination";
 import { mergeForecastEngines } from "../utils/forecastEngines";
 import { useChartTheme } from "../utils/chartTheme";
@@ -548,9 +551,9 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     );
   }, [activeYear, selectedWaterbody, sheets, currentUser]);
 
-  // ── For past years: push edits to MongoDB ─────────────────────────────
+  // ── Push edits to MongoDB (every year, 2026 included) ──────────────────
   const pushYearToServer = async () => {
-    if (activeYear === 2026 || syncing) return;
+    if (syncing) return;
     const local = getYearSheetsLocal(activeYear);
     if (!local || !local.length) {
       alertError(`No local data for ${activeYear} to push.`);
@@ -564,8 +567,8 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     if (!confirmed) return;
     setSyncing(true);
     try {
-      await api.put(`/water/wqm/${activeYear}`, { sheets: local });
-      toastSaved(`WQM ${activeYear} pushed to the server. Chart Configuration will now use the updated data.`);
+      await saveYearToServer(activeYear, local);
+      toastSaved(`WQM ${activeYear} pushed to the server. Every dashboard will now use the updated data.`);
       logActivity(`Pushed WQM ${activeYear} edits to server`, {}, currentUser);
     } catch (err) {
       alertError(err?.response?.data?.message || `Failed to push WQM ${activeYear}.`);
@@ -574,9 +577,8 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     }
   };
 
-  // ── Re-fetch past year from server (discard local edits) ──────────────
+  // ── Re-fetch a year from server (discard local edits) ─────────────────
   const refetchFromServer = async () => {
-    if (activeYear === 2026) return;
     const confirmed = await confirmAction({
       title: `Re-fetch WQM ${activeYear} from server?`,
       text: `This discards any local edits you made to the ${activeYear} dataset and replaces them with the server copy.`,
@@ -586,11 +588,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     if (!confirmed) return;
     setSyncing(true);
     try {
-      const res = await api.get(`/water/wqm/${activeYear}`);
-      const fresh = res.data?.sheets || [];
-      if (!fresh.length) throw new Error('Empty response from server.');
-      encryptedStorage.setItem(`wqm_${activeYear}_drafts`, fresh);
-      window.dispatchEvent(new CustomEvent('wqm:drafts-updated'));
+      await refetchYearFromServer(activeYear);
       toastSaved(`WQM ${activeYear} refreshed from server.`);
       logActivity(`Re-fetched WQM ${activeYear} from server`, {}, currentUser);
     } catch (err) {
@@ -607,9 +605,7 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
     const past = activeYear !== 2026;
     const confirmed = await confirmAction({
       title: `Delete "${selectedWaterbody.name}"${past ? ` from WQM ${activeYear}` : ""}?`,
-      text: past
-        ? `This removes the waterbody from the local ${activeYear} copy. Use "Push edits to server" afterwards to permanently delete it from MongoDB.`
-        : "This removes the waterbody from the local dataset. This cannot be undone without a page reload.",
+      text: `This removes the waterbody from the local ${activeYear} copy. Use "Push edits to server" afterwards to permanently delete it from MongoDB.`,
       confirmButtonText: "Yes, delete",
       danger: true,
     });
@@ -779,27 +775,26 @@ const WaterbodyProfileSettings = ({ currentUser }) => {
             </button>
           ))}
         </div>
-        {isPastYear && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Button
-              size="small"
-              icon={<ReloadOutlined />}
-              loading={syncing}
-              onClick={refetchFromServer}
-            >
-              Re-fetch from server
-            </Button>
-            <Button
-              size="small"
-              type="primary"
-              icon={<CloudServerOutlined />}
-              loading={syncing}
-              onClick={pushYearToServer}
-            >
-              Push edits to server
-            </Button>
-          </div>
-        )}
+        {/* Every year is stored in MongoDB, including the live 2026 year. */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Button
+            size="small"
+            icon={<ReloadOutlined />}
+            loading={syncing}
+            onClick={refetchFromServer}
+          >
+            Re-fetch from server
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            icon={<CloudServerOutlined />}
+            loading={syncing}
+            onClick={pushYearToServer}
+          >
+            Push edits to server
+          </Button>
+        </div>
       </div>
 
       {isPastYear && (
@@ -2368,19 +2363,23 @@ const AiForecastPanel = () => {
   // Subscribed rather than a one-time snapshot, so the control reflects a change
   // made in another tab (or elsewhere in the app) instead of drifting out of
   // sync with what the forecast views are actually using.
-  const forecastMonths = useForecastMonths();
+  const forecastMonths = useForecastHorizon();
   const [savedMonths, setSavedMonths] = useState(false);
   const [localEngineStatus, setLocalEngineStatus] = useState(null);
   const [checkingEngines, setCheckingEngines] = useState(false);
   const [engineMessage, setEngineMessage] = useState("");
 
-  const saveForecastMonths = (val) => {
-    // Writing through the shared setter dispatches the sync event, which is what
-    // updates `forecastMonths` here and in every forecast view at once.
-    const clamped = setForecastMonthsSetting(val);
-    setSavedMonths(true);
-    setTimeout(() => setSavedMonths(false), 2200);
-    toastSaved(`Forecast horizon set to ${clamped} month${clamped > 1 ? "s" : ""}.`);
+  const saveForecastMonths = async (val) => {
+    // Saved to MongoDB so the public dashboard and every other device use it;
+    // the shared setter then dispatches the sync event for this browser's views.
+    try {
+      const clamped = await saveForecastMonthsToServer(val);
+      setSavedMonths(true);
+      setTimeout(() => setSavedMonths(false), 2200);
+      toastSaved(`Forecast horizon set to ${clamped} month${clamped > 1 ? "s" : ""} for all users.`);
+    } catch (err) {
+      alertError(err?.response?.data?.message || "Failed to save the forecast horizon.");
+    }
   };
 
   const checkLocalEngines = useCallback(() => {
@@ -3101,6 +3100,21 @@ const Settings = ({ initialSection = "accounts" }) => {
                 </p>
                 <EmailPanel />
               </div>
+            </section>
+          )}
+
+          {active === "vera" && (
+            <section className="settings-section">
+              <h3>VERA Assistant</h3>
+              <p className="section-desc">
+                Model, permissions and limits for VERA, the Virtual
+                Environmental Response Assistant. Developer only.
+              </p>
+              {user?.role === "developer" ? (
+                <VeraSettingsPanel currentUser={user} />
+              ) : (
+                <p className="section-note">Only developers can change VERA settings.</p>
+              )}
             </section>
           )}
 

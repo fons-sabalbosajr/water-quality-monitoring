@@ -25,6 +25,7 @@ import {
   IcoWater,
 } from '../components/Icons';
 import useReveal from '../utils/useReveal';
+import VeraLandingSection from '../components/vera/VeraLandingSection';
 import './Welcome.css';
 
 const CesiumStationMap = lazy(() => import('../components/CesiumStationMap'));
@@ -344,6 +345,7 @@ const Welcome = () => {
             <a href="#features">Features</a>
             <a href="#map-preview">3D Map</a>
             <a href="#ai-assistant">AI Assistant</a>
+            <a href="#vera">VERA</a>
             <a href="#menus">Menus</a>
             <Link to="/public-dashboard" className="welcome-nav-publink">Public Dashboard</Link>
           </nav>
@@ -374,6 +376,7 @@ const Welcome = () => {
             <a href="#features" onClick={closeMobileNav}>Features</a>
             <a href="#map-preview" onClick={closeMobileNav}>3D Map</a>
             <a href="#ai-assistant" onClick={closeMobileNav}>AI Assistant</a>
+            <a href="#vera" onClick={closeMobileNav}>VERA</a>
             <a href="#menus" onClick={closeMobileNav}>Menus</a>
             <Link to="/public-dashboard" className="welcome-mobile-publink" onClick={closeMobileNav}>
               Public Dashboard
@@ -515,6 +518,8 @@ const Welcome = () => {
           ))}
         </div>
       </section>
+
+      <VeraLandingSection />
 
       <section className="welcome-section welcome-menu-preview" id="menus" aria-labelledby="menus-title">
         <div className="welcome-section-head">
