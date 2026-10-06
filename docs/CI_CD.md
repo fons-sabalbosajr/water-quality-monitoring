@@ -24,7 +24,7 @@ The deploy ships **the exact bundle CI built and tested**. Nothing is built on t
    - Updates the API code (never touches `server/.env`), runs `npm ci --omit=dev`, reloads PM2.
    - **Health gate** — waits for `GET /api/health` to report `"db":"connected"`. If it fails, the previous API code is restored and restarted automatically and the deploy fails.
    - Publishes the new front-end **only after** the API is healthy, and records the revision in `APP_DIR/DEPLOYED_REVISION`.
-4. CI smoke-tests the public URL: health, a route added by this release, and that the page references the bundle CI just built.
+4. CI smoke-tests production **on the VPS, through Nginx** (the real hostname and TLS, pinned to 127.0.0.1): health, a route added by this release, and that the page references the bundle CI just built. It runs on the server because the domain is behind **Cloudflare**, whose bot protection challenges scripted requests from GitHub's data-centre IPs. A non-blocking step also tries the public URL from the runner and notes when Cloudflare challenges it.
 
 These paths were rehearsed on Linux (normal deploy, failed health → rollback, failed pre-flight → no change) before the pipeline was enabled.
 

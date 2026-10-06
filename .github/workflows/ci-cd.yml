@@ -151,27 +151,45 @@ jobs:
           $SSH "$VPS_USER@$VPS_HOST" \
             "APP_DIR='$APP_DIR' WEB_ROOT='$WEB_ROOT' PM2_NAME='$PM2_NAME' bash /tmp/remote-deploy.sh /tmp/wqms-release.tgz; rc=\$?; rm -f /tmp/wqms-release.tgz /tmp/remote-deploy.sh; exit \$rc"
 
-      # Responses are captured before matching: `curl | grep -q` under the
-      # runner's `pipefail` reports SIGPIPE as a failure once grep exits early
-      # (that false alarm failed the first production deploy's smoke test).
-      - name: Smoke test public URL
+      # The domain is behind Cloudflare, whose bot protection challenges
+      # scripted requests from GitHub's data-centre IPs — the public URL
+      # answered from a browser but not from the runner. So the blocking smoke
+      # test runs ON the VPS, through the production Nginx (real hostname/TLS
+      # pinned to 127.0.0.1): it exercises the real routing, web root and API.
+      # Responses are captured before matching (`curl | grep -q` under
+      # pipefail reports SIGPIPE as a failure).
+      - name: Smoke test production (through Nginx on the VPS)
         run: |
           expected="$(grep -o 'assets/index-[^"]*\.js' release/web/index.html | head -1)"
+          host="${PUBLIC_URL#https://}"; host="${host%%/*}"
+          base="/${PUBLIC_URL#https://*/}"
+          ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" bash -s -- "$host" "$base" "$expected" <<'REMOTE'
+          host="$1"; base="$2"; expected="$3"
+          get() { curl -fsSk -m 15 --resolve "$host:443:127.0.0.1" "https://$host$base$1" || true; }
           for attempt in 1 2 3 4 5; do
-            health="$(curl -fsS -m 20 "$PUBLIC_URL/api/health" || true)"
-            # A route added in this release — proves the new API is serving.
-            months="$(curl -fsS -m 20 "$PUBLIC_URL/api/water/public/forecast-months" || true)"
-            # The page must reference the bundle this run built.
-            page="$(curl -fsS -m 20 "$PUBLIC_URL/welcome" || true)"
+            health="$(get /api/health)"
+            months="$(get /api/water/public/forecast-months)"   # route added in this release
+            page="$(get /welcome)"                                # must reference this run's bundle
             if [[ "$health" == *'"db":"connected"'* && "$months" == *'"months"'* && "$page" == *"$expected"* ]]; then
-              echo "Production is serving revision ${GITHUB_SHA::7} ($expected)."
+              echo "Production (Nginx → API) is serving $expected."
               exit 0
             fi
             echo "attempt $attempt: health=${health:0:80} months=${months:0:40} bundle-match=$([[ "$page" == *"$expected"* ]] && echo yes || echo no)"
-            sleep 6
+            sleep 5
           done
-          echo "::error::Public smoke test failed after deploy — check $PUBLIC_URL"
+          echo "::error::Smoke test through Nginx failed after deploy"
           exit 1
+          REMOTE
+
+      - name: Public URL check (informational — Cloudflare may challenge the runner)
+        continue-on-error: true
+        run: |
+          code="$(curl -s -m 20 -o /dev/null -w '%{http_code}' "$PUBLIC_URL/api/health" || true)"
+          if [[ "$code" == "200" ]]; then
+            echo "Public URL reachable through Cloudflare (HTTP 200)."
+          else
+            echo "::notice::Public URL returned HTTP $code to the GitHub runner — expected when Cloudflare challenges data-centre traffic; the on-server smoke test above is authoritative."
+          fi
 
       - name: Remove SSH key
         if: always()
