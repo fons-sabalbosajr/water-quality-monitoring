@@ -38,8 +38,18 @@ Create a dedicated key pair (do not reuse a personal key):
 ssh-keygen -t ed25519 -C "github-actions-wqms-deploy" -f wqms_deploy -N ""
 ```
 
-Install `wqms_deploy.pub` for the deploy user on the VPS — either append it to
-`~/.ssh/authorized_keys` there, or in hPanel → VPS → Settings → SSH keys.
+Install `wqms_deploy.pub` for root on the VPS **in `/root/.ssh/authorized_keys2`**:
+
+```bash
+printf '%s\n' '<contents of wqms_deploy.pub>' > /root/.ssh/authorized_keys2 && chmod 600 /root/.ssh/authorized_keys2 && ssh-keygen -lf /root/.ssh/authorized_keys2
+```
+
+Why `authorized_keys2` (sshd reads both files): the hPanel **Browser terminal**
+logs in by appending a temporary, expiring RSA key to `authorized_keys` *without
+a trailing newline*, so a key appended after it is glued onto that line and
+silently rejected. The Hostinger API's "attach public key" also did not reach
+this VPS (no action was recorded). The production deploy key is installed this
+way since 2026-10-06.
 
 ### 2. GitHub secrets — *Settings → Secrets and variables → Actions*
 
@@ -69,6 +79,12 @@ For VERA's AI mode add `GEMINI_API_KEY` (and optionally `VERA_MODEL`, default `g
 - **Re-deploy / deploy manually**: *Actions → CI/CD → Run workflow* on `main`.
 - **Roll back**: revert the commit on `main` (the pipeline deploys the revert), or on the VPS restore a snapshot from `deploy-backups/` and `pm2 reload embr3-wqms-api`.
 - **Data**: deploys never touch MongoDB. New workbooks are loaded with `node scripts/importWqmYear.js <year>` (see `DEVELOPER.md`).
+
+## Production facts (verified 2026-10-06)
+
+- `APP_DIR=/opt/embr3/water-quality-monitoring/app`, `WEB_ROOT=/var/www/embr3/water-quality-monitoring`, PM2 process `embr3-wqms-api` (API on port 5007, MongoDB Atlas `erms-cluster`) — the pipeline defaults.
+- The VPS hosts **seven** PM2 apps (HR, IIS, OCSM, AQM, …). The deploy reloads only `embr3-wqms-api`. Do **not** run `pm2 update` to clear the "In-memory PM2 is out-of-date" warning without a maintenance window — it restarts every app.
+- PM2's daemon runs apps on **Node 20.20** (system Node is 22.22). The API supports Node ≥ 20.
 
 ## Troubleshooting
 
